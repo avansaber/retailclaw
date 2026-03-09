@@ -2,12 +2,12 @@
 name: retailclaw
 version: 1.0.0
 description: Retail Management -- pricing, promotions, loyalty programs, merchandising, wholesale/B2B, returns & exchanges. 57 actions across 6 domains with gift cards, planograms, and analytics. Built on ERPClaw foundation.
-author: AvanSaber / Nikhil Jathar
-homepage: https://www.retailclaw.ai
+author: AvanSaber
+homepage: https://github.com/avansaber/retailclaw
 source: https://github.com/avansaber/retailclaw
 tier: 4
 category: retail
-requires: [erpclaw-setup, erpclaw-gl, erpclaw-selling, erpclaw-buying, erpclaw-inventory, erpclaw-payments]
+requires: [erpclaw]
 database: ~/.openclaw/erpclaw/data.sqlite
 user-invocable: true
 tags: [retailclaw, retail, pricing, promotion, coupon, loyalty, rewards, gift-card, merchandising, planogram, category, wholesale, b2b, returns, exchange, rma, pos, margin, channel]
@@ -27,7 +27,7 @@ double-entry General Ledger with Decimal precision.
 ## Security Model
 
 - **Local-only**: All data stored in `~/.openclaw/erpclaw/data.sqlite`
-- **No credentials required**: Uses erpclaw_lib shared library (installed by erpclaw-setup)
+- **No credentials required**: Uses erpclaw_lib shared library (installed by erpclaw)
 - **SQL injection safe**: All queries use parameterized statements
 - **Zero network calls**: No external API calls, no telemetry, no cloud dependencies
 - **Immutable audit trail**: All actions write to audit_log
@@ -43,7 +43,7 @@ channel performance, retail.
 
 If the database does not exist or you see "no such table" errors:
 ```
-python3 {baseDir}/../erpclaw-setup/scripts/db_query.py --action initialize-database
+python3 {baseDir}/../erpclaw/scripts/erpclaw-setup/db_query.py --action initialize-database
 python3 {baseDir}/init_db.py
 python3 {baseDir}/scripts/db_query.py --action status
 ```

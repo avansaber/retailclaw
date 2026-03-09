@@ -1,0 +1,125 @@
+ocui_version: "1.0"
+skill: retailclaw
+skill_version: "1.0.0"
+display_name: Retail Management
+icon: store
+color: "#e11d48"
+default_entity: price_list
+
+domains:
+  - key: pricing
+    label: Pricing
+    entities: [price_list, price_list_item, promotion]
+  - key: loyalty
+    label: Loyalty
+    entities: [loyalty_program, loyalty_member, loyalty_transaction, gift_card]
+  - key: merchandising
+    label: Merchandising
+    entities: [category, planogram, planogram_item]
+  - key: wholesale
+    label: Wholesale
+    entities: [wholesale_customer, wholesale_price, wholesale_order, wholesale_order_item]
+  - key: returns
+    label: Returns
+    entities: [return_authorization, return_item, exchange]
+
+dashboard:
+  kpis:
+    - key: active_promotions
+      label: "Active Promotions"
+      type: count
+      action: retail-list-promotions
+      filter: { promo-status: active }
+      severity: success
+      icon: tag
+      drill_action: retail-list-promotions
+      drill_filter: { promo-status: active }
+    - key: loyalty_members
+      label: "Loyalty Members"
+      type: count
+      action: retail-list-loyalty-members
+      icon: crown
+      drill_action: retail-list-loyalty-members
+    - key: pending_returns
+      label: "Pending Returns"
+      type: count
+      action: retail-list-return-authorizations
+      filter: { return-status: pending }
+      severity: warning
+      icon: rotate-ccw
+      drill_action: retail-list-return-authorizations
+      drill_filter: { return-status: pending }
+    - key: wholesale_orders
+      label: "Wholesale Orders"
+      type: count
+      action: retail-list-wholesale-orders
+      filter: { order-status: pending }
+      severity: info
+      icon: truck
+      drill_action: retail-list-wholesale-orders
+      drill_filter: { order-status: pending }
+    - key: price_lists
+      label: "Price Lists"
+      type: count
+      action: retail-list-price-lists
+      icon: list
+      drill_action: retail-list-price-lists
+  quick_actions:
+    - action: retail-add-price-list
+      label: "New Price List"
+      icon: list
+    - action: retail-add-promotion
+      label: "New Promotion"
+      icon: tag
+    - action: retail-add-loyalty-program
+      label: "New Loyalty Program"
+      icon: crown
+    - action: retail-add-gift-card
+      label: "Issue Gift Card"
+      icon: gift
+    - action: retail-add-return-authorization
+      label: "Process Return"
+      icon: rotate-ccw
+    - action: retail-add-wholesale-order
+      label: "New Wholesale Order"
+      icon: truck
+
+workflows:
+  - after: retail-add-price-list
+    suggest:
+      - action: retail-add-price-list-item
+        label: "Add items to price list"
+        pass: { price-list-id: id }
+  - after: retail-add-promotion
+    suggest:
+      - action: retail-activate-promotion
+        label: "Activate promotion"
+        pass: { promotion-id: id }
+  - after: retail-add-loyalty-program
+    suggest:
+      - action: retail-add-loyalty-member
+        label: "Enroll a member"
+        pass: { program-id: id }
+  - after: retail-add-loyalty-member
+    suggest:
+      - action: retail-add-loyalty-points
+        label: "Add points"
+        pass: { member-id: id }
+  - after: retail-add-return-authorization
+    suggest:
+      - action: retail-add-return-item
+        label: "Add return items"
+        pass: { return-id: id }
+  - after: retail-add-return-item
+    suggest:
+      - action: retail-process-return
+        label: "Process return"
+        pass: { return-id: return_id }
+  - after: retail-add-wholesale-customer
+    suggest:
+      - action: retail-add-wholesale-price
+        label: "Set wholesale pricing"
+        pass: { wholesale-customer-id: id }
+      - action: retail-add-wholesale-order
+        label: "Create wholesale order"
+        pass: { wholesale-customer-id: id }

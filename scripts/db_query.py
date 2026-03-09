@@ -182,6 +182,14 @@ def main():
     parser.add_argument("--new-item-name")
     parser.add_argument("--price-difference")
 
+    # ── GL Posting (optional, for process-return) ──────────────────
+    parser.add_argument("--sales-returns-account-id", help="GL account for Sales Returns & Allowances (debit)")
+    parser.add_argument("--cash-account-id", help="GL account for Cash/AR (credit for refund)")
+    parser.add_argument("--inventory-account-id", help="GL account for Inventory (debit on restock)")
+    parser.add_argument("--cogs-account-id", help="GL account for COGS (credit on restock)")
+    parser.add_argument("--cost-center-id", help="Cost center for P&L GL entries")
+    parser.add_argument("--restock-cost", help="Total cost of restocked inventory items")
+
     args = parser.parse_args()
     action = args.action
 

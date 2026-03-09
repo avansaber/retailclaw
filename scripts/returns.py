@@ -1,6 +1,7 @@
 """RetailClaw -- returns & exchanges domain module
 
 Actions for return authorizations, return items, and exchanges (3 tables, 8 actions).
+GL posting for returns/refunds: optional integration with erpclaw_lib.gl_posting.
 Imported by db_query.py (unified router).
 """
 import json
@@ -21,6 +22,12 @@ try:
     ENTITY_PREFIXES.setdefault("retailclaw_return_authorization", "RMA-")
 except ImportError:
     pass
+
+try:
+    from erpclaw_lib.gl_posting import insert_gl_entries, reverse_gl_entries
+    HAS_GL = True
+except ImportError:
+    HAS_GL = False
 
 _now_iso = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -300,6 +307,81 @@ def list_return_items(conn, args):
 
 
 # ===========================================================================
+# GL Posting helpers
+# ===========================================================================
+def _build_refund_gl_entries(data, args):
+    """Build GL entries for a return/refund.
+
+    GL pattern for retail returns:
+        DR: Sales Returns & Allowances  (refund_amount)
+        CR: Cash / Accounts Receivable  (refund_amount)
+
+    If items are restocked (disposition='restock'), also post:
+        DR: Inventory                   (cost of restocked items)
+        CR: COGS                        (cost of restocked items)
+
+    Returns (entries, restock_entries) where each is a list of dicts or empty.
+    All amounts are str (Decimal text).
+    """
+    refund_amount = to_decimal(data.get("refund_amount", "0"))
+    if refund_amount <= Decimal("0"):
+        return [], []
+
+    sales_returns_account_id = getattr(args, "sales_returns_account_id", None)
+    cash_account_id = getattr(args, "cash_account_id", None)
+    cost_center_id = getattr(args, "cost_center_id", None)
+    customer_id = data.get("customer_id")
+
+    # Primary refund entries require both accounts
+    if not sales_returns_account_id or not cash_account_id:
+        return [], []
+
+    refund_str = str(round_currency(refund_amount))
+
+    primary_entries = [
+        {
+            "account_id": sales_returns_account_id,
+            "debit": refund_str,
+            "credit": "0",
+            "cost_center_id": cost_center_id,
+        },
+        {
+            "account_id": cash_account_id,
+            "debit": "0",
+            "credit": refund_str,
+            "party_type": "customer" if customer_id else None,
+            "party_id": customer_id if customer_id else None,
+        },
+    ]
+
+    # Inventory restock GL entries (optional, separate entry_set)
+    restock_entries = []
+    inventory_account_id = getattr(args, "inventory_account_id", None)
+    cogs_account_id = getattr(args, "cogs_account_id", None)
+    restock_amount_str = getattr(args, "restock_cost", None)
+
+    if inventory_account_id and cogs_account_id and restock_amount_str:
+        restock_amount = to_decimal(restock_amount_str)
+        if restock_amount > Decimal("0"):
+            cost_str = str(round_currency(restock_amount))
+            restock_entries = [
+                {
+                    "account_id": inventory_account_id,
+                    "debit": cost_str,
+                    "credit": "0",
+                },
+                {
+                    "account_id": cogs_account_id,
+                    "debit": "0",
+                    "credit": cost_str,
+                    "cost_center_id": cost_center_id,
+                },
+            ]
+
+    return primary_entries, restock_entries
+
+
+# ===========================================================================
 # 7. process-return
 # ===========================================================================
 def process_return(conn, args):
@@ -325,16 +407,72 @@ def process_return(conn, args):
         "UPDATE retailclaw_return_authorization SET return_status = ?, updated_at = datetime('now') WHERE id = ?",
         (new_status, return_id)
     )
+
+    # ── GL Posting (optional, graceful degradation) ──────────────────
+    gl_ids = []
+    gl_warnings = []
+
+    if HAS_GL and new_status == "completed":
+        try:
+            primary_entries, restock_entries = _build_refund_gl_entries(data, args)
+            posting_date = data.get("return_date", _now_iso()[:10])
+            company_id = data["company_id"]
+
+            # Post primary refund GL entries (Sales Returns DR / Cash CR)
+            if primary_entries:
+                primary_ids = insert_gl_entries(
+                    conn,
+                    primary_entries,
+                    voucher_type="retail_return",
+                    voucher_id=return_id,
+                    posting_date=posting_date,
+                    company_id=company_id,
+                    remarks=f"RetailClaw return refund: {data.get('naming_series', return_id)}",
+                    entry_set="primary",
+                )
+                gl_ids.extend(primary_ids)
+
+            # Post inventory restock GL entries (Inventory DR / COGS CR)
+            if restock_entries:
+                restock_ids = insert_gl_entries(
+                    conn,
+                    restock_entries,
+                    voucher_type="retail_return",
+                    voucher_id=return_id,
+                    posting_date=posting_date,
+                    company_id=company_id,
+                    remarks=f"RetailClaw return restock: {data.get('naming_series', return_id)}",
+                    entry_set="cogs",
+                )
+                gl_ids.extend(restock_ids)
+
+            # Store GL entry IDs on the return authorization
+            if gl_ids:
+                conn.execute(
+                    "UPDATE retailclaw_return_authorization SET gl_entry_ids = ?, updated_at = datetime('now') WHERE id = ?",
+                    (json.dumps(gl_ids), return_id)
+                )
+        except Exception as e:
+            # GL posting failed -- still process the return but note the warning.
+            # This ensures graceful degradation if GL accounts aren't configured.
+            gl_warnings.append(f"GL posting skipped: {str(e)}")
+
     audit(conn, "retailclaw_return_authorization", return_id, "retail-process-return", None)
     conn.commit()
-    ok({
+
+    result = {
         "id": return_id,
         "return_status": new_status,
         "subtotal": data["subtotal"],
         "restocking_fee": data["restocking_fee"],
         "refund_amount": data["refund_amount"],
         "items_processed": item_count,
-    })
+    }
+    if gl_ids:
+        result["gl_entry_ids"] = gl_ids
+    if gl_warnings:
+        result["gl_warnings"] = gl_warnings
+    ok(result)
 
 
 # ===========================================================================

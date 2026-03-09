@@ -469,6 +469,7 @@ def create_retailclaw_tables(db_path=None):
             subtotal        TEXT NOT NULL DEFAULT '0.00',
             restocking_fee  TEXT NOT NULL DEFAULT '0.00',
             refund_amount   TEXT NOT NULL DEFAULT '0.00',
+            gl_entry_ids    TEXT,
             notes           TEXT,
             return_status   TEXT NOT NULL DEFAULT 'pending'
                             CHECK(return_status IN ('pending','approved','received','inspected','completed','rejected','cancelled')),
