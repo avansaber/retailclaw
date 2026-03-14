@@ -20,6 +20,7 @@ try:
     from erpclaw_lib.validation import check_input_lengths
     from erpclaw_lib.response import ok, err
     from erpclaw_lib.dependencies import check_required_tables
+    from erpclaw_lib.args import SafeArgumentParser
 except ImportError:
     import json as _json
     print(_json.dumps({
@@ -55,7 +56,7 @@ ACTIONS.update(REPORTS_ACTIONS)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="retailclaw")
+    parser = SafeArgumentParser(description="retailclaw")
     parser.add_argument("--action", required=True, choices=sorted(ACTIONS.keys()))
     parser.add_argument("--db-path", default=None)
 
