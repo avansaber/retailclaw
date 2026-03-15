@@ -18,6 +18,7 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
 
     ENTITY_PREFIXES.setdefault("retailclaw_return_authorization", "RMA-")
 except ImportError:
@@ -47,7 +48,7 @@ VALID_EXCHANGE_STATUSES = ("pending", "completed", "cancelled")
 def _validate_company(conn, company_id):
     if not company_id:
         err("--company-id is required")
-    if not conn.execute("SELECT id FROM company WHERE id = ?", (company_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("company")).select(Field("id")).where(Field("id") == P()).get_sql(), (company_id,)).fetchone():
         err(f"Company {company_id} not found")
 
 
@@ -59,7 +60,7 @@ def _validate_enum(value, valid_values, field_name):
 def _get_return(conn, return_id):
     if not return_id:
         err("--return-id is required")
-    row = conn.execute("SELECT * FROM retailclaw_return_authorization WHERE id = ?", (return_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("retailclaw_return_authorization")).select(Table("retailclaw_return_authorization").star).where(Field("id") == P()).get_sql(), (return_id,)).fetchone()
     if not row:
         err(f"Return authorization {return_id} not found")
     return row
@@ -80,20 +81,15 @@ def add_return_authorization(conn, args):
 
     customer_id = getattr(args, "customer_id", None)
     if customer_id:
-        if not conn.execute("SELECT id FROM customer WHERE id = ?", (customer_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("customer")).select(Field("id")).where(Field("id") == P()).get_sql(), (customer_id,)).fetchone():
             err(f"Customer {customer_id} not found")
 
     ra_id = str(uuid.uuid4())
     naming = get_next_name(conn, "retailclaw_return_authorization", company_id=args.company_id)
     now = _now_iso()
 
-    conn.execute("""
-        INSERT INTO retailclaw_return_authorization (
-            id, naming_series, customer_id, customer_name, return_date, reason,
-            return_type, original_invoice_id, subtotal, restocking_fee, refund_amount,
-            notes, return_status, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("retailclaw_return_authorization", {"id": P(), "naming_series": P(), "customer_id": P(), "customer_name": P(), "return_date": P(), "reason": P(), "return_type": P(), "original_invoice_id": P(), "subtotal": P(), "restocking_fee": P(), "refund_amount": P(), "notes": P(), "return_status": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         ra_id, naming, customer_id,
         getattr(args, "customer_name", None),
         return_date,
@@ -166,17 +162,11 @@ def get_return_authorization(conn, args):
     row = _get_return(conn, return_id)
     data = row_to_dict(row)
 
-    items = conn.execute(
-        "SELECT * FROM retailclaw_return_item WHERE return_id = ? ORDER BY created_at ASC",
-        (return_id,)
-    ).fetchall()
+    items = conn.execute(Q.from_(Table("retailclaw_return_item")).select(Table("retailclaw_return_item").star).where(Field("return_id") == P()).orderby(Field("created_at"), order=Order.asc).get_sql(), (return_id,)).fetchall()
     data["items"] = [row_to_dict(i) for i in items]
     data["item_count"] = len(items)
 
-    exchanges = conn.execute(
-        "SELECT * FROM retailclaw_exchange WHERE return_id = ? ORDER BY created_at ASC",
-        (return_id,)
-    ).fetchall()
+    exchanges = conn.execute(Q.from_(Table("retailclaw_exchange")).select(Table("retailclaw_exchange").star).where(Field("return_id") == P()).orderby(Field("created_at"), order=Order.asc).get_sql(), (return_id,)).fetchall()
     data["exchanges"] = [row_to_dict(e) for e in exchanges]
     ok(data)
 
@@ -243,17 +233,13 @@ def add_return_item(conn, args):
 
     item_id = getattr(args, "item_id", None)
     if item_id:
-        if not conn.execute("SELECT id FROM item WHERE id = ?", (item_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("item")).select(Field("id")).where(Field("id") == P()).get_sql(), (item_id,)).fetchone():
             err(f"Item {item_id} not found")
 
     ri_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO retailclaw_return_item (
-            id, return_id, item_id, item_name, qty, rate, amount,
-            reason, item_condition, disposition, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("retailclaw_return_item", {"id": P(), "return_id": P(), "item_id": P(), "item_name": P(), "qty": P(), "rate": P(), "amount": P(), "reason": P(), "item_condition": P(), "disposition": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         ri_id, return_id, item_id, item_name, qty,
         str(rate_dec), str(amount_dec),
         getattr(args, "reason", None),
@@ -267,7 +253,7 @@ def add_return_item(conn, args):
     ).fetchone()
     new_subtotal = round_currency(to_decimal(str(total_rows[0])))
     restocking = to_decimal(
-        conn.execute("SELECT restocking_fee FROM retailclaw_return_authorization WHERE id = ?", (return_id,)).fetchone()[0]
+        conn.execute(Q.from_(Table("retailclaw_return_authorization")).select(Field("restocking_fee")).where(Field("id") == P()).get_sql(), (return_id,)).fetchone()[0]
     )
     refund = round_currency(new_subtotal - restocking) if new_subtotal > restocking else Decimal("0.00")
     conn.execute(
@@ -394,9 +380,7 @@ def process_return(conn, args):
         err(f"Return is already {current_status}. Cannot process.")
 
     # Count items
-    item_count = conn.execute(
-        "SELECT COUNT(*) FROM retailclaw_return_item WHERE return_id = ?", (return_id,)
-    ).fetchone()[0]
+    item_count = conn.execute(Q.from_(Table("retailclaw_return_item")).select(fn.Count("*")).where(Field("return_id") == P()).get_sql(), (return_id,)).fetchone()[0]
     if item_count == 0:
         err("No items in this return authorization. Add items first.")
 
@@ -490,25 +474,20 @@ def add_exchange(conn, args):
 
     original_item_id = getattr(args, "original_item_id", None)
     if original_item_id:
-        if not conn.execute("SELECT id FROM item WHERE id = ?", (original_item_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("item")).select(Field("id")).where(Field("id") == P()).get_sql(), (original_item_id,)).fetchone():
             err(f"Original item {original_item_id} not found")
 
     new_item_id = getattr(args, "new_item_id", None)
     if new_item_id:
-        if not conn.execute("SELECT id FROM item WHERE id = ?", (new_item_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("item")).select(Field("id")).where(Field("id") == P()).get_sql(), (new_item_id,)).fetchone():
             err(f"New item {new_item_id} not found")
 
     price_difference = getattr(args, "price_difference", None) or "0"
 
     ex_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO retailclaw_exchange (
-            id, return_id, original_item_id, original_item_name,
-            new_item_id, new_item_name, qty, price_difference,
-            exchange_status, notes, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("retailclaw_exchange", {"id": P(), "return_id": P(), "original_item_id": P(), "original_item_name": P(), "new_item_id": P(), "new_item_name": P(), "qty": P(), "price_difference": P(), "exchange_status": P(), "notes": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         ex_id, return_id, original_item_id,
         getattr(args, "original_item_name", None),
         new_item_id, new_item_name,

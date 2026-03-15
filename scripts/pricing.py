@@ -17,6 +17,7 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
 
     ENTITY_PREFIXES.setdefault("retailclaw_price_list", "RPL-")
     ENTITY_PREFIXES.setdefault("retailclaw_promotion", "PROMO-")
@@ -42,7 +43,7 @@ VALID_COUPON_STATUSES = ("active", "used", "expired", "cancelled")
 def _validate_company(conn, company_id):
     if not company_id:
         err("--company-id is required")
-    if not conn.execute("SELECT id FROM company WHERE id = ?", (company_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("company")).select(Field("id")).where(Field("id") == P()).get_sql(), (company_id,)).fetchone():
         err(f"Company {company_id} not found")
 
 
@@ -67,12 +68,8 @@ def add_price_list(conn, args):
     naming = get_next_name(conn, "retailclaw_price_list", company_id=args.company_id)
     now = _now_iso()
 
-    conn.execute("""
-        INSERT INTO retailclaw_price_list (
-            id, naming_series, name, description, currency, price_list_type,
-            is_default, valid_from, valid_to, status, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("retailclaw_price_list", {"id": P(), "naming_series": P(), "name": P(), "description": P(), "currency": P(), "price_list_type": P(), "is_default": P(), "valid_from": P(), "valid_to": P(), "status": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         pl_id, naming, name,
         getattr(args, "description", None),
         getattr(args, "currency", None) or "USD",
@@ -94,7 +91,7 @@ def update_price_list(conn, args):
     pl_id = getattr(args, "price_list_id", None)
     if not pl_id:
         err("--price-list-id is required")
-    if not conn.execute("SELECT id FROM retailclaw_price_list WHERE id = ?", (pl_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("retailclaw_price_list")).select(Field("id")).where(Field("id") == P()).get_sql(), (pl_id,)).fetchone():
         err(f"Price list {pl_id} not found")
 
     updates, params, changed = [], [], []
@@ -140,14 +137,12 @@ def get_price_list(conn, args):
     pl_id = getattr(args, "price_list_id", None)
     if not pl_id:
         err("--price-list-id is required")
-    row = conn.execute("SELECT * FROM retailclaw_price_list WHERE id = ?", (pl_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("retailclaw_price_list")).select(Table("retailclaw_price_list").star).where(Field("id") == P()).get_sql(), (pl_id,)).fetchone()
     if not row:
         err(f"Price list {pl_id} not found")
     data = row_to_dict(row)
     # item count
-    item_count = conn.execute(
-        "SELECT COUNT(*) FROM retailclaw_price_list_item WHERE price_list_id = ?", (pl_id,)
-    ).fetchone()[0]
+    item_count = conn.execute(Q.from_(Table("retailclaw_price_list_item")).select(fn.Count("*")).where(Field("price_list_id") == P()).get_sql(), (pl_id,)).fetchone()[0]
     data["item_count"] = item_count
     ok(data)
 
@@ -188,7 +183,7 @@ def add_price_list_item(conn, args):
     pl_id = getattr(args, "price_list_id", None)
     if not pl_id:
         err("--price-list-id is required")
-    if not conn.execute("SELECT id FROM retailclaw_price_list WHERE id = ?", (pl_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("retailclaw_price_list")).select(Field("id")).where(Field("id") == P()).get_sql(), (pl_id,)).fetchone():
         err(f"Price list {pl_id} not found")
 
     rate = getattr(args, "rate", None)
@@ -197,17 +192,13 @@ def add_price_list_item(conn, args):
 
     item_id = getattr(args, "item_id", None)
     if item_id:
-        if not conn.execute("SELECT id FROM item WHERE id = ?", (item_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("item")).select(Field("id")).where(Field("id") == P()).get_sql(), (item_id,)).fetchone():
             err(f"Item {item_id} not found")
 
     pli_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO retailclaw_price_list_item (
-            id, price_list_id, item_id, item_name, rate, min_qty,
-            currency, valid_from, valid_to, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("retailclaw_price_list_item", {"id": P(), "price_list_id": P(), "item_id": P(), "item_name": P(), "rate": P(), "min_qty": P(), "currency": P(), "valid_from": P(), "valid_to": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         pli_id, pl_id, item_id,
         getattr(args, "item_name", None),
         str(round_currency(to_decimal(rate))),
@@ -229,7 +220,7 @@ def update_price_list_item(conn, args):
     pli_id = getattr(args, "price_list_item_id", None)
     if not pli_id:
         err("--price-list-item-id is required")
-    if not conn.execute("SELECT id FROM retailclaw_price_list_item WHERE id = ?", (pli_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("retailclaw_price_list_item")).select(Field("id")).where(Field("id") == P()).get_sql(), (pli_id,)).fetchone():
         err(f"Price list item {pli_id} not found")
 
     updates, params, changed = [], [], []
@@ -326,14 +317,8 @@ def add_promotion(conn, args):
     max_uses = getattr(args, "max_uses", None)
     max_uses_val = int(max_uses) if max_uses else None
 
-    conn.execute("""
-        INSERT INTO retailclaw_promotion (
-            id, naming_series, name, description, promo_type, discount_value,
-            min_purchase, max_discount, max_uses, used_count,
-            applicable_items, applicable_categories,
-            start_date, end_date, promo_status, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("retailclaw_promotion", {"id": P(), "naming_series": P(), "name": P(), "description": P(), "promo_type": P(), "discount_value": P(), "min_purchase": P(), "max_discount": P(), "max_uses": P(), "used_count": P(), "applicable_items": P(), "applicable_categories": P(), "start_date": P(), "end_date": P(), "promo_status": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         promo_id, naming, name,
         getattr(args, "description", None),
         promo_type,
@@ -358,7 +343,7 @@ def update_promotion(conn, args):
     promo_id = getattr(args, "promotion_id", None)
     if not promo_id:
         err("--promotion-id is required")
-    if not conn.execute("SELECT id FROM retailclaw_promotion WHERE id = ?", (promo_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("retailclaw_promotion")).select(Field("id")).where(Field("id") == P()).get_sql(), (promo_id,)).fetchone():
         err(f"Promotion {promo_id} not found")
 
     updates, params, changed = [], [], []
@@ -449,7 +434,7 @@ def activate_promotion(conn, args):
     promo_id = getattr(args, "promotion_id", None)
     if not promo_id:
         err("--promotion-id is required")
-    row = conn.execute("SELECT promo_status FROM retailclaw_promotion WHERE id = ?", (promo_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("retailclaw_promotion")).select(Field("promo_status")).where(Field("id") == P()).get_sql(), (promo_id,)).fetchone()
     if not row:
         err(f"Promotion {promo_id} not found")
     if row[0] not in ("draft", "paused"):
@@ -471,7 +456,7 @@ def deactivate_promotion(conn, args):
     promo_id = getattr(args, "promotion_id", None)
     if not promo_id:
         err("--promotion-id is required")
-    row = conn.execute("SELECT promo_status FROM retailclaw_promotion WHERE id = ?", (promo_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("retailclaw_promotion")).select(Field("promo_status")).where(Field("id") == P()).get_sql(), (promo_id,)).fetchone()
     if not row:
         err(f"Promotion {promo_id} not found")
     if row[0] != "active":

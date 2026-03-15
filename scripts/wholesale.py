@@ -17,6 +17,7 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
 
     ENTITY_PREFIXES.setdefault("retailclaw_wholesale_customer", "WSCUST-")
     ENTITY_PREFIXES.setdefault("retailclaw_wholesale_order", "WSO-")
@@ -38,7 +39,7 @@ VALID_ORDER_STATUSES = ("draft", "confirmed", "processing", "shipped", "delivere
 def _validate_company(conn, company_id):
     if not company_id:
         err("--company-id is required")
-    if not conn.execute("SELECT id FROM company WHERE id = ?", (company_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("company")).select(Field("id")).where(Field("id") == P()).get_sql(), (company_id,)).fetchone():
         err(f"Company {company_id} not found")
 
 
@@ -50,7 +51,7 @@ def _validate_enum(value, valid_values, field_name):
 def _get_wholesale_customer(conn, wc_id):
     if not wc_id:
         err("--wholesale-customer-id is required")
-    row = conn.execute("SELECT * FROM retailclaw_wholesale_customer WHERE id = ?", (wc_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("retailclaw_wholesale_customer")).select(Table("retailclaw_wholesale_customer").star).where(Field("id") == P()).get_sql(), (wc_id,)).fetchone()
     if not row:
         err(f"Wholesale customer {wc_id} not found")
     return row
@@ -68,21 +69,15 @@ def add_wholesale_customer(conn, args):
 
     customer_id = getattr(args, "customer_id", None)
     if customer_id:
-        if not conn.execute("SELECT id FROM customer WHERE id = ?", (customer_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("customer")).select(Field("id")).where(Field("id") == P()).get_sql(), (customer_id,)).fetchone():
             err(f"Customer {customer_id} not found")
 
     wc_id = str(uuid.uuid4())
     naming = get_next_name(conn, "retailclaw_wholesale_customer", company_id=args.company_id)
     now = _now_iso()
 
-    conn.execute("""
-        INSERT INTO retailclaw_wholesale_customer (
-            id, naming_series, customer_id, business_name, contact_name, email, phone,
-            tax_id, credit_limit, payment_terms, discount_pct,
-            address_line1, address_line2, city, state, zip_code,
-            wholesale_status, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("retailclaw_wholesale_customer", {"id": P(), "naming_series": P(), "customer_id": P(), "business_name": P(), "contact_name": P(), "email": P(), "phone": P(), "tax_id": P(), "credit_limit": P(), "payment_terms": P(), "discount_pct": P(), "address_line1": P(), "address_line2": P(), "city": P(), "state": P(), "zip_code": P(), "wholesale_status": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         wc_id, naming, customer_id, business_name,
         getattr(args, "contact_name", None),
         getattr(args, "email", None),
@@ -199,18 +194,13 @@ def add_wholesale_price(conn, args):
 
     item_id = getattr(args, "item_id", None)
     if item_id:
-        if not conn.execute("SELECT id FROM item WHERE id = ?", (item_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("item")).select(Field("id")).where(Field("id") == P()).get_sql(), (item_id,)).fetchone():
             err(f"Item {item_id} not found")
 
     wp_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO retailclaw_wholesale_price (
-            id, wholesale_customer_id, item_id, item_name, wholesale_rate,
-            min_order_qty, currency, valid_from, valid_to, company_id,
-            created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("retailclaw_wholesale_price", {"id": P(), "wholesale_customer_id": P(), "item_id": P(), "item_name": P(), "wholesale_rate": P(), "min_order_qty": P(), "currency": P(), "valid_from": P(), "valid_to": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         wp_id, wc_id, item_id,
         getattr(args, "item_name", None),
         str(round_currency(to_decimal(wholesale_rate))),
@@ -274,13 +264,8 @@ def add_wholesale_order(conn, args):
     naming = get_next_name(conn, "retailclaw_wholesale_order", company_id=args.company_id)
     now = _now_iso()
 
-    conn.execute("""
-        INSERT INTO retailclaw_wholesale_order (
-            id, naming_series, wholesale_customer_id, order_date,
-            expected_delivery_date, subtotal, discount_amount, tax_amount, total,
-            notes, order_status, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("retailclaw_wholesale_order", {"id": P(), "naming_series": P(), "wholesale_customer_id": P(), "order_date": P(), "expected_delivery_date": P(), "subtotal": P(), "discount_amount": P(), "tax_amount": P(), "total": P(), "notes": P(), "order_status": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         wo_id, naming, wc_id, order_date,
         getattr(args, "expected_delivery_date", None),
         "0.00", "0.00", "0.00", "0.00",
@@ -299,15 +284,12 @@ def get_wholesale_order(conn, args):
     order_id = getattr(args, "wholesale_order_id", None)
     if not order_id:
         err("--wholesale-order-id is required")
-    row = conn.execute("SELECT * FROM retailclaw_wholesale_order WHERE id = ?", (order_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("retailclaw_wholesale_order")).select(Table("retailclaw_wholesale_order").star).where(Field("id") == P()).get_sql(), (order_id,)).fetchone()
     if not row:
         err(f"Wholesale order {order_id} not found")
     data = row_to_dict(row)
 
-    items = conn.execute(
-        "SELECT * FROM retailclaw_wholesale_order_item WHERE order_id = ? ORDER BY created_at ASC",
-        (order_id,)
-    ).fetchall()
+    items = conn.execute(Q.from_(Table("retailclaw_wholesale_order_item")).select(Table("retailclaw_wholesale_order_item").star).where(Field("order_id") == P()).orderby(Field("created_at"), order=Order.asc).get_sql(), (order_id,)).fetchall()
     data["items"] = [row_to_dict(i) for i in items]
     data["item_count"] = len(items)
     ok(data)
@@ -352,7 +334,7 @@ def add_wholesale_order_item(conn, args):
     order_id = getattr(args, "wholesale_order_id", None)
     if not order_id:
         err("--wholesale-order-id is required")
-    order_row = conn.execute("SELECT * FROM retailclaw_wholesale_order WHERE id = ?", (order_id,)).fetchone()
+    order_row = conn.execute(Q.from_(Table("retailclaw_wholesale_order")).select(Table("retailclaw_wholesale_order").star).where(Field("id") == P()).get_sql(), (order_id,)).fetchone()
     if not order_row:
         err(f"Wholesale order {order_id} not found")
 
@@ -370,17 +352,13 @@ def add_wholesale_order_item(conn, args):
 
     item_id = getattr(args, "item_id", None)
     if item_id:
-        if not conn.execute("SELECT id FROM item WHERE id = ?", (item_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("item")).select(Field("id")).where(Field("id") == P()).get_sql(), (item_id,)).fetchone():
             err(f"Item {item_id} not found")
 
     oi_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO retailclaw_wholesale_order_item (
-            id, order_id, item_id, item_name, qty, rate, amount, notes,
-            created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("retailclaw_wholesale_order_item", {"id": P(), "order_id": P(), "item_id": P(), "item_name": P(), "qty": P(), "rate": P(), "amount": P(), "notes": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         oi_id, order_id, item_id, item_name, qty,
         str(rate_dec), str(amount_dec),
         getattr(args, "notes", None),

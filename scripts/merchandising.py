@@ -17,6 +17,7 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
 
     ENTITY_PREFIXES.setdefault("retailclaw_planogram", "PLANO-")
 except ImportError:
@@ -38,7 +39,7 @@ VALID_DISPLAY_STATUSES = ("planned", "active", "inactive", "archived")
 def _validate_company(conn, company_id):
     if not company_id:
         err("--company-id is required")
-    if not conn.execute("SELECT id FROM company WHERE id = ?", (company_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("company")).select(Field("id")).where(Field("id") == P()).get_sql(), (company_id,)).fetchone():
         err(f"Company {company_id} not found")
 
 
@@ -59,17 +60,13 @@ def add_category(conn, args):
 
     parent_id = getattr(args, "parent_id", None)
     if parent_id:
-        if not conn.execute("SELECT id FROM retailclaw_category WHERE id = ?", (parent_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("retailclaw_category")).select(Field("id")).where(Field("id") == P()).get_sql(), (parent_id,)).fetchone():
             err(f"Parent category {parent_id} not found")
 
     cat_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO retailclaw_category (
-            id, name, parent_id, description, sort_order, is_active,
-            company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("retailclaw_category", {"id": P(), "name": P(), "parent_id": P(), "description": P(), "sort_order": P(), "is_active": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         cat_id, name, parent_id,
         getattr(args, "description", None),
         int(getattr(args, "sort_order", None) or 0),
@@ -87,7 +84,7 @@ def update_category(conn, args):
     cat_id = getattr(args, "category_id", None)
     if not cat_id:
         err("--category-id is required")
-    if not conn.execute("SELECT id FROM retailclaw_category WHERE id = ?", (cat_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("retailclaw_category")).select(Field("id")).where(Field("id") == P()).get_sql(), (cat_id,)).fetchone():
         err(f"Category {cat_id} not found")
 
     updates, params, changed = [], [], []
@@ -115,7 +112,7 @@ def update_category(conn, args):
     parent_id = getattr(args, "parent_id", None)
     if parent_id is not None:
         if parent_id and parent_id != cat_id:
-            if not conn.execute("SELECT id FROM retailclaw_category WHERE id = ?", (parent_id,)).fetchone():
+            if not conn.execute(Q.from_(Table("retailclaw_category")).select(Field("id")).where(Field("id") == P()).get_sql(), (parent_id,)).fetchone():
                 err(f"Parent category {parent_id} not found")
         elif parent_id == cat_id:
             err("Category cannot be its own parent")
@@ -177,13 +174,8 @@ def add_planogram(conn, args):
     naming = get_next_name(conn, "retailclaw_planogram", company_id=args.company_id)
     now = _now_iso()
 
-    conn.execute("""
-        INSERT INTO retailclaw_planogram (
-            id, naming_series, name, description, store_section, fixture_type,
-            shelf_count, width_inches, height_inches, planogram_status,
-            effective_date, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("retailclaw_planogram", {"id": P(), "naming_series": P(), "name": P(), "description": P(), "store_section": P(), "fixture_type": P(), "shelf_count": P(), "width_inches": P(), "height_inches": P(), "planogram_status": P(), "effective_date": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         plano_id, naming, name,
         getattr(args, "description", None),
         getattr(args, "store_section", None),
@@ -207,7 +199,7 @@ def update_planogram(conn, args):
     plano_id = getattr(args, "planogram_id", None)
     if not plano_id:
         err("--planogram-id is required")
-    if not conn.execute("SELECT id FROM retailclaw_planogram WHERE id = ?", (plano_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("retailclaw_planogram")).select(Field("id")).where(Field("id") == P()).get_sql(), (plano_id,)).fetchone():
         err(f"Planogram {plano_id} not found")
 
     updates, params, changed = [], [], []
@@ -283,22 +275,18 @@ def add_planogram_item(conn, args):
     plano_id = getattr(args, "planogram_id", None)
     if not plano_id:
         err("--planogram-id is required")
-    if not conn.execute("SELECT id FROM retailclaw_planogram WHERE id = ?", (plano_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("retailclaw_planogram")).select(Field("id")).where(Field("id") == P()).get_sql(), (plano_id,)).fetchone():
         err(f"Planogram {plano_id} not found")
 
     item_id = getattr(args, "item_id", None)
     if item_id:
-        if not conn.execute("SELECT id FROM item WHERE id = ?", (item_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("item")).select(Field("id")).where(Field("id") == P()).get_sql(), (item_id,)).fetchone():
             err(f"Item {item_id} not found")
 
     pi_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO retailclaw_planogram_item (
-            id, planogram_id, item_id, item_name, shelf_number, position,
-            facings, min_stock, max_stock, notes, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("retailclaw_planogram_item", {"id": P(), "planogram_id": P(), "item_id": P(), "item_name": P(), "shelf_number": P(), "position": P(), "facings": P(), "min_stock": P(), "max_stock": P(), "notes": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         pi_id, plano_id, item_id,
         getattr(args, "item_name", None),
         int(getattr(args, "shelf_number", None) or 1),

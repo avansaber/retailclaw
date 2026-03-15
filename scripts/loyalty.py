@@ -18,6 +18,7 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
 
     ENTITY_PREFIXES.setdefault("retailclaw_loyalty_program", "LPROG-")
     ENTITY_PREFIXES.setdefault("retailclaw_loyalty_member", "LMEM-")
@@ -43,7 +44,7 @@ VALID_CARD_STATUSES = ("active", "redeemed", "expired", "cancelled")
 def _validate_company(conn, company_id):
     if not company_id:
         err("--company-id is required")
-    if not conn.execute("SELECT id FROM company WHERE id = ?", (company_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("company")).select(Field("id")).where(Field("id") == P()).get_sql(), (company_id,)).fetchone():
         err(f"Company {company_id} not found")
 
 
@@ -55,7 +56,7 @@ def _validate_enum(value, valid_values, field_name):
 def _get_member(conn, member_id):
     if not member_id:
         err("--member-id is required")
-    row = conn.execute("SELECT * FROM retailclaw_loyalty_member WHERE id = ?", (member_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("retailclaw_loyalty_member")).select(Table("retailclaw_loyalty_member").star).where(Field("id") == P()).get_sql(), (member_id,)).fetchone()
     if not row:
         err(f"Loyalty member {member_id} not found")
     return row
@@ -75,12 +76,8 @@ def add_loyalty_program(conn, args):
     naming = get_next_name(conn, "retailclaw_loyalty_program", company_id=args.company_id)
     now = _now_iso()
 
-    conn.execute("""
-        INSERT INTO retailclaw_loyalty_program (
-            id, naming_series, name, description, points_per_dollar, redemption_rate,
-            tiers, program_status, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("retailclaw_loyalty_program", {"id": P(), "naming_series": P(), "name": P(), "description": P(), "points_per_dollar": P(), "redemption_rate": P(), "tiers": P(), "program_status": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         prog_id, naming, name,
         getattr(args, "description", None),
         str(to_decimal(getattr(args, "points_per_dollar", None) or "1")),
@@ -100,13 +97,11 @@ def get_loyalty_program(conn, args):
     prog_id = getattr(args, "program_id", None)
     if not prog_id:
         err("--program-id is required")
-    row = conn.execute("SELECT * FROM retailclaw_loyalty_program WHERE id = ?", (prog_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("retailclaw_loyalty_program")).select(Table("retailclaw_loyalty_program").star).where(Field("id") == P()).get_sql(), (prog_id,)).fetchone()
     if not row:
         err(f"Loyalty program {prog_id} not found")
     data = row_to_dict(row)
-    member_count = conn.execute(
-        "SELECT COUNT(*) FROM retailclaw_loyalty_member WHERE program_id = ?", (prog_id,)
-    ).fetchone()[0]
+    member_count = conn.execute(Q.from_(Table("retailclaw_loyalty_member")).select(fn.Count("*")).where(Field("program_id") == P()).get_sql(), (prog_id,)).fetchone()[0]
     data["member_count"] = member_count
     ok(data)
 
@@ -149,7 +144,7 @@ def add_loyalty_member(conn, args):
     program_id = getattr(args, "program_id", None)
     if not program_id:
         err("--program-id is required")
-    if not conn.execute("SELECT id FROM retailclaw_loyalty_program WHERE id = ?", (program_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("retailclaw_loyalty_program")).select(Field("id")).where(Field("id") == P()).get_sql(), (program_id,)).fetchone():
         err(f"Loyalty program {program_id} not found")
 
     customer_name = getattr(args, "customer_name", None)
@@ -162,20 +157,15 @@ def add_loyalty_member(conn, args):
 
     customer_id = getattr(args, "customer_id", None)
     if customer_id:
-        if not conn.execute("SELECT id FROM customer WHERE id = ?", (customer_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("customer")).select(Field("id")).where(Field("id") == P()).get_sql(), (customer_id,)).fetchone():
             err(f"Customer {customer_id} not found")
 
     mem_id = str(uuid.uuid4())
     naming = get_next_name(conn, "retailclaw_loyalty_member", company_id=args.company_id)
     now = _now_iso()
 
-    conn.execute("""
-        INSERT INTO retailclaw_loyalty_member (
-            id, naming_series, program_id, customer_id, customer_name, email, phone,
-            member_tier, points_balance, lifetime_points, enrollment_date,
-            last_activity_date, member_status, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("retailclaw_loyalty_member", {"id": P(), "naming_series": P(), "program_id": P(), "customer_id": P(), "customer_name": P(), "email": P(), "phone": P(), "member_tier": P(), "points_balance": P(), "lifetime_points": P(), "enrollment_date": P(), "last_activity_date": P(), "member_status": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         mem_id, naming, program_id, customer_id, customer_name,
         getattr(args, "email", None),
         getattr(args, "phone", None),
@@ -238,10 +228,7 @@ def get_loyalty_member(conn, args):
     row = _get_member(conn, member_id)
     data = row_to_dict(row)
     # Recent transactions
-    txns = conn.execute(
-        "SELECT * FROM retailclaw_loyalty_transaction WHERE member_id = ? ORDER BY created_at DESC LIMIT 10",
-        (member_id,)
-    ).fetchall()
+    txns = conn.execute(Q.from_(Table("retailclaw_loyalty_transaction")).select(Table("retailclaw_loyalty_transaction").star).where(Field("member_id") == P()).orderby(Field("created_at"), order=Order.desc).limit(10).get_sql(), (member_id,)).fetchall()
     data["recent_transactions"] = [row_to_dict(t) for t in txns]
     ok(data)
 
@@ -308,12 +295,8 @@ def add_loyalty_points(conn, args):
     )
 
     txn_id = str(uuid.uuid4())
-    conn.execute("""
-        INSERT INTO retailclaw_loyalty_transaction (
-            id, member_id, transaction_type, points, balance_after,
-            reference_type, reference_id, description, created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("retailclaw_loyalty_transaction", {"id": P(), "member_id": P(), "transaction_type": P(), "points": P(), "balance_after": P(), "reference_type": P(), "reference_id": P(), "description": P(), "created_at": P()})
+    conn.execute(sql, (
         txn_id, member_id, "earn", points_val, new_balance,
         getattr(args, "reference_type", None),
         getattr(args, "reference_id", None),
@@ -353,12 +336,8 @@ def redeem_loyalty_points(conn, args):
     )
 
     txn_id = str(uuid.uuid4())
-    conn.execute("""
-        INSERT INTO retailclaw_loyalty_transaction (
-            id, member_id, transaction_type, points, balance_after,
-            reference_type, reference_id, description, created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("retailclaw_loyalty_transaction", {"id": P(), "member_id": P(), "transaction_type": P(), "points": P(), "balance_after": P(), "reference_type": P(), "reference_id": P(), "description": P(), "created_at": P()})
+    conn.execute(sql, (
         txn_id, member_id, "redeem", -points_val, new_balance,
         getattr(args, "reference_type", None),
         getattr(args, "reference_id", None),
@@ -390,13 +369,8 @@ def add_gift_card(conn, args):
     card_number = getattr(args, "card_number", None) or f"GC-{secrets.token_hex(6).upper()}"
     now = _now_iso()
 
-    conn.execute("""
-        INSERT INTO retailclaw_gift_card (
-            id, card_number, initial_balance, current_balance, currency,
-            purchaser_name, recipient_name, recipient_email,
-            issue_date, expiration_date, card_status, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("retailclaw_gift_card", {"id": P(), "card_number": P(), "initial_balance": P(), "current_balance": P(), "currency": P(), "purchaser_name": P(), "recipient_name": P(), "recipient_email": P(), "issue_date": P(), "expiration_date": P(), "card_status": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         gc_id, card_number,
         str(balance_dec), str(balance_dec),
         getattr(args, "currency", None) or "USD",
@@ -423,9 +397,9 @@ def check_gift_card_balance(conn, args):
         err("--card-number or --gift-card-id is required")
 
     if gc_id:
-        row = conn.execute("SELECT * FROM retailclaw_gift_card WHERE id = ?", (gc_id,)).fetchone()
+        row = conn.execute(Q.from_(Table("retailclaw_gift_card")).select(Table("retailclaw_gift_card").star).where(Field("id") == P()).get_sql(), (gc_id,)).fetchone()
     else:
-        row = conn.execute("SELECT * FROM retailclaw_gift_card WHERE card_number = ?", (card_number,)).fetchone()
+        row = conn.execute(Q.from_(Table("retailclaw_gift_card")).select(Table("retailclaw_gift_card").star).where(Field("card_number") == P()).get_sql(), (card_number,)).fetchone()
 
     if not row:
         err("Gift card not found")
@@ -451,9 +425,9 @@ def redeem_gift_card(conn, args):
         err("--card-number or --gift-card-id is required")
 
     if gc_id:
-        row = conn.execute("SELECT * FROM retailclaw_gift_card WHERE id = ?", (gc_id,)).fetchone()
+        row = conn.execute(Q.from_(Table("retailclaw_gift_card")).select(Table("retailclaw_gift_card").star).where(Field("id") == P()).get_sql(), (gc_id,)).fetchone()
     else:
-        row = conn.execute("SELECT * FROM retailclaw_gift_card WHERE card_number = ?", (card_number,)).fetchone()
+        row = conn.execute(Q.from_(Table("retailclaw_gift_card")).select(Table("retailclaw_gift_card").star).where(Field("card_number") == P()).get_sql(), (card_number,)).fetchone()
 
     if not row:
         err("Gift card not found")

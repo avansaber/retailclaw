@@ -14,6 +14,7 @@ try:
     from erpclaw_lib.db import get_connection, DEFAULT_DB_PATH
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.response import ok, err, row_to_dict
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
 except ImportError:
     DEFAULT_DB_PATH = "~/.openclaw/erpclaw/data.sqlite"
     pass
