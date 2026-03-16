@@ -18,7 +18,7 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, LiteralValue, insert_row, update_row, dynamic_update
 
     ENTITY_PREFIXES.setdefault("retailclaw_return_authorization", "RMA-")
 except ImportError:
@@ -112,43 +112,39 @@ def update_return_authorization(conn, args):
     return_id = getattr(args, "return_id", None)
     _get_return(conn, return_id)
 
-    updates, params, changed = [], [], []
+    data, changed = {}, []
     for arg_name, col_name in {
         "customer_name": "customer_name", "reason": "reason",
         "original_invoice_id": "original_invoice_id", "notes": "notes",
     }.items():
         val = getattr(args, arg_name, None)
         if val is not None:
-            updates.append(f"{col_name} = ?")
-            params.append(val)
+            data[col_name] = val
             changed.append(col_name)
 
     return_type = getattr(args, "return_type", None)
     if return_type is not None:
         _validate_enum(return_type, VALID_RETURN_TYPES, "return-type")
-        updates.append("return_type = ?")
-        params.append(return_type)
+        data["return_type"] = return_type
         changed.append("return_type")
 
     return_status = getattr(args, "return_status", None)
     if return_status is not None:
         _validate_enum(return_status, VALID_RETURN_STATUSES, "return-status")
-        updates.append("return_status = ?")
-        params.append(return_status)
+        data["return_status"] = return_status
         changed.append("return_status")
 
     restocking_fee = getattr(args, "restocking_fee", None)
     if restocking_fee is not None:
-        updates.append("restocking_fee = ?")
-        params.append(str(round_currency(to_decimal(restocking_fee))))
+        data["restocking_fee"] = str(round_currency(to_decimal(restocking_fee)))
         changed.append("restocking_fee")
 
-    if not updates:
+    if not data:
         err("No fields to update")
 
-    updates.append("updated_at = datetime('now')")
-    params.append(return_id)
-    conn.execute(f"UPDATE retailclaw_return_authorization SET {', '.join(updates)} WHERE id = ?", params)
+    data["updated_at"] = LiteralValue("datetime('now')")
+    sql, params = dynamic_update("retailclaw_return_authorization", data, where={"id": return_id})
+    conn.execute(sql, params)
     audit(conn, "retailclaw_return_authorization", return_id, "retail-update-return-authorization", None, {"updated_fields": changed})
     conn.commit()
     ok({"id": return_id, "updated_fields": changed})
@@ -175,30 +171,34 @@ def get_return_authorization(conn, args):
 # 4. list-return-authorizations
 # ===========================================================================
 def list_return_authorizations(conn, args):
-    where, params = ["1=1"], []
+    t = Table("retailclaw_return_authorization")
+    q = Q.from_(t).select(t.star)
+    qc = Q.from_(t).select(fn.Count("*"))
+    params = []
     if getattr(args, "company_id", None):
-        where.append("company_id = ?")
+        q = q.where(t.company_id == P())
+        qc = qc.where(t.company_id == P())
         params.append(args.company_id)
     if getattr(args, "customer_id", None):
-        where.append("customer_id = ?")
+        q = q.where(t.customer_id == P())
+        qc = qc.where(t.customer_id == P())
         params.append(args.customer_id)
     if getattr(args, "return_status", None):
-        where.append("return_status = ?")
+        q = q.where(t.return_status == P())
+        qc = qc.where(t.return_status == P())
         params.append(args.return_status)
     if getattr(args, "return_type", None):
-        where.append("return_type = ?")
+        q = q.where(t.return_type == P())
+        qc = qc.where(t.return_type == P())
         params.append(args.return_type)
     if getattr(args, "search", None):
-        where.append("(customer_name LIKE ? OR naming_series LIKE ? OR reason LIKE ?)")
+        q = q.where((t.customer_name.like(P())) | (t.naming_series.like(P())) | (t.reason.like(P())))
+        qc = qc.where((t.customer_name.like(P())) | (t.naming_series.like(P())) | (t.reason.like(P())))
         params.extend([f"%{args.search}%", f"%{args.search}%", f"%{args.search}%"])
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM retailclaw_return_authorization WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM retailclaw_return_authorization WHERE {where_sql} ORDER BY return_date DESC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+    total = conn.execute(qc.get_sql(), params).fetchone()[0]
+    q = q.orderby(t.return_date, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -247,8 +247,9 @@ def add_return_item(conn, args):
     ))
 
     # Recalculate return subtotal and refund
+    ri = Table("retailclaw_return_item")
     total_rows = conn.execute(
-        "SELECT COALESCE(SUM(CAST(amount AS REAL)), 0) FROM retailclaw_return_item WHERE return_id = ?",
+        Q.from_(ri).select(fn.Coalesce(fn.Sum(LiteralValue("CAST(amount AS REAL)")), 0)).where(ri.return_id == P()).get_sql(),
         (return_id,)
     ).fetchone()
     new_subtotal = round_currency(to_decimal(str(total_rows[0])))
@@ -256,10 +257,12 @@ def add_return_item(conn, args):
         conn.execute(Q.from_(Table("retailclaw_return_authorization")).select(Field("restocking_fee")).where(Field("id") == P()).get_sql(), (return_id,)).fetchone()[0]
     )
     refund = round_currency(new_subtotal - restocking) if new_subtotal > restocking else Decimal("0.00")
-    conn.execute(
-        "UPDATE retailclaw_return_authorization SET subtotal = ?, refund_amount = ?, updated_at = datetime('now') WHERE id = ?",
-        (str(new_subtotal), str(refund), return_id)
-    )
+    sql, upd_params = dynamic_update("retailclaw_return_authorization", {
+        "subtotal": str(new_subtotal),
+        "refund_amount": str(refund),
+        "updated_at": LiteralValue("datetime('now')"),
+    }, where={"id": return_id})
+    conn.execute(sql, upd_params)
 
     audit(conn, "retailclaw_return_item", ri_id, "retail-add-return-item", None)
     conn.commit()
@@ -270,21 +273,22 @@ def add_return_item(conn, args):
 # 6. list-return-items
 # ===========================================================================
 def list_return_items(conn, args):
-    where, params = ["1=1"], []
+    t = Table("retailclaw_return_item")
+    q = Q.from_(t).select(t.star)
+    qc = Q.from_(t).select(fn.Count("*"))
+    params = []
     if getattr(args, "return_id", None):
-        where.append("return_id = ?")
+        q = q.where(t.return_id == P())
+        qc = qc.where(t.return_id == P())
         params.append(args.return_id)
     if getattr(args, "item_id", None):
-        where.append("item_id = ?")
+        q = q.where(t.item_id == P())
+        qc = qc.where(t.item_id == P())
         params.append(args.item_id)
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM retailclaw_return_item WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM retailclaw_return_item WHERE {where_sql} ORDER BY created_at ASC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+    total = conn.execute(qc.get_sql(), params).fetchone()[0]
+    q = q.orderby(t.created_at, order=Order.asc).limit(P()).offset(P())
+    rows = conn.execute(q.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -387,10 +391,11 @@ def process_return(conn, args):
     new_status = getattr(args, "return_status", None) or "completed"
     _validate_enum(new_status, VALID_RETURN_STATUSES, "return-status")
 
-    conn.execute(
-        "UPDATE retailclaw_return_authorization SET return_status = ?, updated_at = datetime('now') WHERE id = ?",
-        (new_status, return_id)
-    )
+    sql, upd_params = dynamic_update("retailclaw_return_authorization", {
+        "return_status": new_status,
+        "updated_at": LiteralValue("datetime('now')"),
+    }, where={"id": return_id})
+    conn.execute(sql, upd_params)
 
     # ── GL Posting (optional, graceful degradation) ──────────────────
     gl_ids = []
@@ -432,10 +437,11 @@ def process_return(conn, args):
 
             # Store GL entry IDs on the return authorization
             if gl_ids:
-                conn.execute(
-                    "UPDATE retailclaw_return_authorization SET gl_entry_ids = ?, updated_at = datetime('now') WHERE id = ?",
-                    (json.dumps(gl_ids), return_id)
-                )
+                sql_gl, gl_params = dynamic_update("retailclaw_return_authorization", {
+                    "gl_entry_ids": json.dumps(gl_ids),
+                    "updated_at": LiteralValue("datetime('now')"),
+                }, where={"id": return_id})
+                conn.execute(sql_gl, gl_params)
         except Exception as e:
             # GL posting failed -- still process the return but note the warning.
             # This ensures graceful degradation if GL accounts aren't configured.

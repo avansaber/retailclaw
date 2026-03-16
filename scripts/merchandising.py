@@ -17,7 +17,7 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, LiteralValue, insert_row, update_row, dynamic_update
 
     ENTITY_PREFIXES.setdefault("retailclaw_planogram", "PLANO-")
 except ImportError:
@@ -87,26 +87,23 @@ def update_category(conn, args):
     if not conn.execute(Q.from_(Table("retailclaw_category")).select(Field("id")).where(Field("id") == P()).get_sql(), (cat_id,)).fetchone():
         err(f"Category {cat_id} not found")
 
-    updates, params, changed = [], [], []
+    data, changed = {}, []
     for arg_name, col_name in {
         "name": "name", "description": "description",
     }.items():
         val = getattr(args, arg_name, None)
         if val is not None:
-            updates.append(f"{col_name} = ?")
-            params.append(val)
+            data[col_name] = val
             changed.append(col_name)
 
     sort_order = getattr(args, "sort_order", None)
     if sort_order is not None:
-        updates.append("sort_order = ?")
-        params.append(int(sort_order))
+        data["sort_order"] = int(sort_order)
         changed.append("sort_order")
 
     is_active = getattr(args, "is_active", None)
     if is_active is not None:
-        updates.append("is_active = ?")
-        params.append(int(is_active))
+        data["is_active"] = int(is_active)
         changed.append("is_active")
 
     parent_id = getattr(args, "parent_id", None)
@@ -116,16 +113,15 @@ def update_category(conn, args):
                 err(f"Parent category {parent_id} not found")
         elif parent_id == cat_id:
             err("Category cannot be its own parent")
-        updates.append("parent_id = ?")
-        params.append(parent_id if parent_id else None)
+        data["parent_id"] = parent_id if parent_id else None
         changed.append("parent_id")
 
-    if not updates:
+    if not data:
         err("No fields to update")
 
-    updates.append("updated_at = datetime('now')")
-    params.append(cat_id)
-    conn.execute(f"UPDATE retailclaw_category SET {', '.join(updates)} WHERE id = ?", params)
+    data["updated_at"] = LiteralValue("datetime('now')")
+    sql, params = dynamic_update("retailclaw_category", data, where={"id": cat_id})
+    conn.execute(sql, params)
     audit(conn, "retailclaw_category", cat_id, "retail-update-category", None, {"updated_fields": changed})
     conn.commit()
     ok({"id": cat_id, "updated_fields": changed})
@@ -135,24 +131,26 @@ def update_category(conn, args):
 # 3. list-categories
 # ===========================================================================
 def list_categories(conn, args):
-    where, params = ["1=1"], []
+    t = Table("retailclaw_category")
+    q = Q.from_(t).select(t.star)
+    qc = Q.from_(t).select(fn.Count("*"))
+    params = []
     if getattr(args, "company_id", None):
-        where.append("company_id = ?")
+        q = q.where(t.company_id == P())
+        qc = qc.where(t.company_id == P())
         params.append(args.company_id)
     if getattr(args, "parent_id", None):
-        where.append("parent_id = ?")
+        q = q.where(t.parent_id == P())
+        qc = qc.where(t.parent_id == P())
         params.append(args.parent_id)
     if getattr(args, "search", None):
-        where.append("(name LIKE ? OR description LIKE ?)")
+        q = q.where((t.name.like(P())) | (t.description.like(P())))
+        qc = qc.where((t.name.like(P())) | (t.description.like(P())))
         params.extend([f"%{args.search}%", f"%{args.search}%"])
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM retailclaw_category WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM retailclaw_category WHERE {where_sql} ORDER BY sort_order ASC, name ASC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+    total = conn.execute(qc.get_sql(), params).fetchone()[0]
+    q = q.orderby(t.sort_order, order=Order.asc).orderby(t.name, order=Order.asc).limit(P()).offset(P())
+    rows = conn.execute(q.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -202,7 +200,7 @@ def update_planogram(conn, args):
     if not conn.execute(Q.from_(Table("retailclaw_planogram")).select(Field("id")).where(Field("id") == P()).get_sql(), (plano_id,)).fetchone():
         err(f"Planogram {plano_id} not found")
 
-    updates, params, changed = [], [], []
+    data, changed = {}, []
     for arg_name, col_name in {
         "name": "name", "description": "description",
         "store_section": "store_section", "fixture_type": "fixture_type",
@@ -211,29 +209,26 @@ def update_planogram(conn, args):
     }.items():
         val = getattr(args, arg_name, None)
         if val is not None:
-            updates.append(f"{col_name} = ?")
-            params.append(val)
+            data[col_name] = val
             changed.append(col_name)
 
     shelf_count = getattr(args, "shelf_count", None)
     if shelf_count is not None:
-        updates.append("shelf_count = ?")
-        params.append(int(shelf_count))
+        data["shelf_count"] = int(shelf_count)
         changed.append("shelf_count")
 
     planogram_status = getattr(args, "planogram_status", None)
     if planogram_status is not None:
         _validate_enum(planogram_status, VALID_PLANOGRAM_STATUSES, "planogram-status")
-        updates.append("planogram_status = ?")
-        params.append(planogram_status)
+        data["planogram_status"] = planogram_status
         changed.append("planogram_status")
 
-    if not updates:
+    if not data:
         err("No fields to update")
 
-    updates.append("updated_at = datetime('now')")
-    params.append(plano_id)
-    conn.execute(f"UPDATE retailclaw_planogram SET {', '.join(updates)} WHERE id = ?", params)
+    data["updated_at"] = LiteralValue("datetime('now')")
+    sql, params = dynamic_update("retailclaw_planogram", data, where={"id": plano_id})
+    conn.execute(sql, params)
     audit(conn, "retailclaw_planogram", plano_id, "retail-update-planogram", None, {"updated_fields": changed})
     conn.commit()
     ok({"id": plano_id, "updated_fields": changed})
@@ -243,24 +238,26 @@ def update_planogram(conn, args):
 # 6. list-planograms
 # ===========================================================================
 def list_planograms(conn, args):
-    where, params = ["1=1"], []
+    t = Table("retailclaw_planogram")
+    q = Q.from_(t).select(t.star)
+    qc = Q.from_(t).select(fn.Count("*"))
+    params = []
     if getattr(args, "company_id", None):
-        where.append("company_id = ?")
+        q = q.where(t.company_id == P())
+        qc = qc.where(t.company_id == P())
         params.append(args.company_id)
     if getattr(args, "planogram_status", None):
-        where.append("planogram_status = ?")
+        q = q.where(t.planogram_status == P())
+        qc = qc.where(t.planogram_status == P())
         params.append(args.planogram_status)
     if getattr(args, "search", None):
-        where.append("(name LIKE ? OR description LIKE ? OR store_section LIKE ?)")
+        q = q.where((t.name.like(P())) | (t.description.like(P())) | (t.store_section.like(P())))
+        qc = qc.where((t.name.like(P())) | (t.description.like(P())) | (t.store_section.like(P())))
         params.extend([f"%{args.search}%", f"%{args.search}%", f"%{args.search}%"])
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM retailclaw_planogram WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM retailclaw_planogram WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+    total = conn.execute(qc.get_sql(), params).fetchone()[0]
+    q = q.orderby(t.created_at, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -306,24 +303,26 @@ def add_planogram_item(conn, args):
 # 8. list-planogram-items
 # ===========================================================================
 def list_planogram_items(conn, args):
-    where, params = ["1=1"], []
+    t = Table("retailclaw_planogram_item")
+    q = Q.from_(t).select(t.star)
+    qc = Q.from_(t).select(fn.Count("*"))
+    params = []
     if getattr(args, "planogram_id", None):
-        where.append("planogram_id = ?")
+        q = q.where(t.planogram_id == P())
+        qc = qc.where(t.planogram_id == P())
         params.append(args.planogram_id)
     if getattr(args, "item_id", None):
-        where.append("item_id = ?")
+        q = q.where(t.item_id == P())
+        qc = qc.where(t.item_id == P())
         params.append(args.item_id)
     if getattr(args, "search", None):
-        where.append("(item_name LIKE ? OR notes LIKE ?)")
+        q = q.where((t.item_name.like(P())) | (t.notes.like(P())))
+        qc = qc.where((t.item_name.like(P())) | (t.notes.like(P())))
         params.extend([f"%{args.search}%", f"%{args.search}%"])
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM retailclaw_planogram_item WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM retailclaw_planogram_item WHERE {where_sql} ORDER BY shelf_number ASC, position ASC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+    total = conn.execute(qc.get_sql(), params).fetchone()[0]
+    q = q.orderby(t.shelf_number, order=Order.asc).orderby(t.position, order=Order.asc).limit(P()).offset(P())
+    rows = conn.execute(q.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,

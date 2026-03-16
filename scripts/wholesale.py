@@ -17,7 +17,7 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, LiteralValue, insert_row, update_row, dynamic_update
 
     ENTITY_PREFIXES.setdefault("retailclaw_wholesale_customer", "WSCUST-")
     ENTITY_PREFIXES.setdefault("retailclaw_wholesale_order", "WSO-")
@@ -105,7 +105,7 @@ def update_wholesale_customer(conn, args):
     wc_id = getattr(args, "wholesale_customer_id", None)
     _get_wholesale_customer(conn, wc_id)
 
-    updates, params, changed = [], [], []
+    data, changed = {}, []
     for arg_name, col_name in {
         "business_name": "business_name", "contact_name": "contact_name",
         "email": "email", "phone": "phone", "tax_id": "tax_id",
@@ -115,35 +115,31 @@ def update_wholesale_customer(conn, args):
     }.items():
         val = getattr(args, arg_name, None)
         if val is not None:
-            updates.append(f"{col_name} = ?")
-            params.append(val)
+            data[col_name] = val
             changed.append(col_name)
 
     credit_limit = getattr(args, "credit_limit", None)
     if credit_limit is not None:
-        updates.append("credit_limit = ?")
-        params.append(str(round_currency(to_decimal(credit_limit))))
+        data["credit_limit"] = str(round_currency(to_decimal(credit_limit)))
         changed.append("credit_limit")
 
     discount_pct = getattr(args, "discount_pct", None)
     if discount_pct is not None:
-        updates.append("discount_pct = ?")
-        params.append(str(to_decimal(discount_pct)))
+        data["discount_pct"] = str(to_decimal(discount_pct))
         changed.append("discount_pct")
 
     wholesale_status = getattr(args, "wholesale_status", None)
     if wholesale_status is not None:
         _validate_enum(wholesale_status, VALID_WHOLESALE_STATUSES, "wholesale-status")
-        updates.append("wholesale_status = ?")
-        params.append(wholesale_status)
+        data["wholesale_status"] = wholesale_status
         changed.append("wholesale_status")
 
-    if not updates:
+    if not data:
         err("No fields to update")
 
-    updates.append("updated_at = datetime('now')")
-    params.append(wc_id)
-    conn.execute(f"UPDATE retailclaw_wholesale_customer SET {', '.join(updates)} WHERE id = ?", params)
+    data["updated_at"] = LiteralValue("datetime('now')")
+    sql, params = dynamic_update("retailclaw_wholesale_customer", data, where={"id": wc_id})
+    conn.execute(sql, params)
     audit(conn, "retailclaw_wholesale_customer", wc_id, "retail-update-wholesale-customer", None, {"updated_fields": changed})
     conn.commit()
     ok({"id": wc_id, "updated_fields": changed})
@@ -153,24 +149,26 @@ def update_wholesale_customer(conn, args):
 # 3. list-wholesale-customers
 # ===========================================================================
 def list_wholesale_customers(conn, args):
-    where, params = ["1=1"], []
+    t = Table("retailclaw_wholesale_customer")
+    q = Q.from_(t).select(t.star)
+    qc = Q.from_(t).select(fn.Count("*"))
+    params = []
     if getattr(args, "company_id", None):
-        where.append("company_id = ?")
+        q = q.where(t.company_id == P())
+        qc = qc.where(t.company_id == P())
         params.append(args.company_id)
     if getattr(args, "wholesale_status", None):
-        where.append("wholesale_status = ?")
+        q = q.where(t.wholesale_status == P())
+        qc = qc.where(t.wholesale_status == P())
         params.append(args.wholesale_status)
     if getattr(args, "search", None):
-        where.append("(business_name LIKE ? OR contact_name LIKE ? OR email LIKE ?)")
+        q = q.where((t.business_name.like(P())) | (t.contact_name.like(P())) | (t.email.like(P())))
+        qc = qc.where((t.business_name.like(P())) | (t.contact_name.like(P())) | (t.email.like(P())))
         params.extend([f"%{args.search}%", f"%{args.search}%", f"%{args.search}%"])
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM retailclaw_wholesale_customer WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM retailclaw_wholesale_customer WHERE {where_sql} ORDER BY business_name ASC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+    total = conn.execute(qc.get_sql(), params).fetchone()[0]
+    q = q.orderby(t.business_name, order=Order.asc).limit(P()).offset(P())
+    rows = conn.execute(q.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -219,27 +217,30 @@ def add_wholesale_price(conn, args):
 # 5. list-wholesale-prices
 # ===========================================================================
 def list_wholesale_prices(conn, args):
-    where, params = ["1=1"], []
+    t = Table("retailclaw_wholesale_price")
+    q = Q.from_(t).select(t.star)
+    qc = Q.from_(t).select(fn.Count("*"))
+    params = []
     if getattr(args, "company_id", None):
-        where.append("company_id = ?")
+        q = q.where(t.company_id == P())
+        qc = qc.where(t.company_id == P())
         params.append(args.company_id)
     if getattr(args, "wholesale_customer_id", None):
-        where.append("wholesale_customer_id = ?")
+        q = q.where(t.wholesale_customer_id == P())
+        qc = qc.where(t.wholesale_customer_id == P())
         params.append(args.wholesale_customer_id)
     if getattr(args, "item_id", None):
-        where.append("item_id = ?")
+        q = q.where(t.item_id == P())
+        qc = qc.where(t.item_id == P())
         params.append(args.item_id)
     if getattr(args, "search", None):
-        where.append("(item_name LIKE ?)")
+        q = q.where(t.item_name.like(P()))
+        qc = qc.where(t.item_name.like(P()))
         params.append(f"%{args.search}%")
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM retailclaw_wholesale_price WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM retailclaw_wholesale_price WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+    total = conn.execute(qc.get_sql(), params).fetchone()[0]
+    q = q.orderby(t.created_at, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -299,27 +300,30 @@ def get_wholesale_order(conn, args):
 # 8. list-wholesale-orders
 # ===========================================================================
 def list_wholesale_orders(conn, args):
-    where, params = ["1=1"], []
+    t = Table("retailclaw_wholesale_order")
+    q = Q.from_(t).select(t.star)
+    qc = Q.from_(t).select(fn.Count("*"))
+    params = []
     if getattr(args, "company_id", None):
-        where.append("company_id = ?")
+        q = q.where(t.company_id == P())
+        qc = qc.where(t.company_id == P())
         params.append(args.company_id)
     if getattr(args, "wholesale_customer_id", None):
-        where.append("wholesale_customer_id = ?")
+        q = q.where(t.wholesale_customer_id == P())
+        qc = qc.where(t.wholesale_customer_id == P())
         params.append(args.wholesale_customer_id)
     if getattr(args, "order_status", None):
-        where.append("order_status = ?")
+        q = q.where(t.order_status == P())
+        qc = qc.where(t.order_status == P())
         params.append(args.order_status)
     if getattr(args, "search", None):
-        where.append("(naming_series LIKE ? OR notes LIKE ?)")
+        q = q.where((t.naming_series.like(P())) | (t.notes.like(P())))
+        qc = qc.where((t.naming_series.like(P())) | (t.notes.like(P())))
         params.extend([f"%{args.search}%", f"%{args.search}%"])
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM retailclaw_wholesale_order WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM retailclaw_wholesale_order WHERE {where_sql} ORDER BY order_date DESC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+    total = conn.execute(qc.get_sql(), params).fetchone()[0]
+    q = q.orderby(t.order_date, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -366,15 +370,18 @@ def add_wholesale_order_item(conn, args):
     ))
 
     # Recalculate order totals
+    woi = Table("retailclaw_wholesale_order_item")
     total_rows = conn.execute(
-        "SELECT COALESCE(SUM(CAST(amount AS REAL)), 0) FROM retailclaw_wholesale_order_item WHERE order_id = ?",
+        Q.from_(woi).select(fn.Coalesce(fn.Sum(LiteralValue("CAST(amount AS REAL)")), 0)).where(woi.order_id == P()).get_sql(),
         (order_id,)
     ).fetchone()
     new_subtotal = round_currency(to_decimal(str(total_rows[0])))
-    conn.execute(
-        "UPDATE retailclaw_wholesale_order SET subtotal = ?, total = ?, updated_at = datetime('now') WHERE id = ?",
-        (str(new_subtotal), str(new_subtotal), order_id)
-    )
+    sql, upd_params = dynamic_update("retailclaw_wholesale_order", {
+        "subtotal": str(new_subtotal),
+        "total": str(new_subtotal),
+        "updated_at": LiteralValue("datetime('now')"),
+    }, where={"id": order_id})
+    conn.execute(sql, upd_params)
 
     audit(conn, "retailclaw_wholesale_order_item", oi_id, "retail-add-wholesale-order-item", None)
     conn.commit()
@@ -385,21 +392,22 @@ def add_wholesale_order_item(conn, args):
 # 10. list-wholesale-order-items
 # ===========================================================================
 def list_wholesale_order_items(conn, args):
-    where, params = ["1=1"], []
+    t = Table("retailclaw_wholesale_order_item")
+    q = Q.from_(t).select(t.star)
+    qc = Q.from_(t).select(fn.Count("*"))
+    params = []
     if getattr(args, "wholesale_order_id", None):
-        where.append("order_id = ?")
+        q = q.where(t.order_id == P())
+        qc = qc.where(t.order_id == P())
         params.append(args.wholesale_order_id)
     if getattr(args, "item_id", None):
-        where.append("item_id = ?")
+        q = q.where(t.item_id == P())
+        qc = qc.where(t.item_id == P())
         params.append(args.item_id)
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM retailclaw_wholesale_order_item WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM retailclaw_wholesale_order_item WHERE {where_sql} ORDER BY created_at ASC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+    total = conn.execute(qc.get_sql(), params).fetchone()[0]
+    q = q.orderby(t.created_at, order=Order.asc).limit(P()).offset(P())
+    rows = conn.execute(q.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,

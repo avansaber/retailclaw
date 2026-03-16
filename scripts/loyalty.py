@@ -18,7 +18,7 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, LiteralValue, insert_row, update_row, dynamic_update
 
     ENTITY_PREFIXES.setdefault("retailclaw_loyalty_program", "LPROG-")
     ENTITY_PREFIXES.setdefault("retailclaw_loyalty_member", "LMEM-")
@@ -110,24 +110,26 @@ def get_loyalty_program(conn, args):
 # 3. list-loyalty-programs
 # ===========================================================================
 def list_loyalty_programs(conn, args):
-    where, params = ["1=1"], []
+    t = Table("retailclaw_loyalty_program")
+    q = Q.from_(t).select(t.star)
+    qc = Q.from_(t).select(fn.Count("*"))
+    params = []
     if getattr(args, "company_id", None):
-        where.append("company_id = ?")
+        q = q.where(t.company_id == P())
+        qc = qc.where(t.company_id == P())
         params.append(args.company_id)
     if getattr(args, "program_status", None):
-        where.append("program_status = ?")
+        q = q.where(t.program_status == P())
+        qc = qc.where(t.program_status == P())
         params.append(args.program_status)
     if getattr(args, "search", None):
-        where.append("(name LIKE ? OR description LIKE ?)")
+        q = q.where((t.name.like(P())) | (t.description.like(P())))
+        qc = qc.where((t.name.like(P())) | (t.description.like(P())))
         params.extend([f"%{args.search}%", f"%{args.search}%"])
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM retailclaw_loyalty_program WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM retailclaw_loyalty_program WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+    total = conn.execute(qc.get_sql(), params).fetchone()[0]
+    q = q.orderby(t.created_at, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -185,36 +187,33 @@ def update_loyalty_member(conn, args):
     member_id = getattr(args, "member_id", None)
     _get_member(conn, member_id)
 
-    updates, params, changed = [], [], []
+    data, changed = {}, []
     for arg_name, col_name in {
         "customer_name": "customer_name", "email": "email", "phone": "phone",
     }.items():
         val = getattr(args, arg_name, None)
         if val is not None:
-            updates.append(f"{col_name} = ?")
-            params.append(val)
+            data[col_name] = val
             changed.append(col_name)
 
     member_tier = getattr(args, "member_tier", None)
     if member_tier is not None:
         _validate_enum(member_tier, VALID_MEMBER_TIERS, "member-tier")
-        updates.append("member_tier = ?")
-        params.append(member_tier)
+        data["member_tier"] = member_tier
         changed.append("member_tier")
 
     member_status = getattr(args, "member_status", None)
     if member_status is not None:
         _validate_enum(member_status, VALID_MEMBER_STATUSES, "member-status")
-        updates.append("member_status = ?")
-        params.append(member_status)
+        data["member_status"] = member_status
         changed.append("member_status")
 
-    if not updates:
+    if not data:
         err("No fields to update")
 
-    updates.append("updated_at = datetime('now')")
-    params.append(member_id)
-    conn.execute(f"UPDATE retailclaw_loyalty_member SET {', '.join(updates)} WHERE id = ?", params)
+    data["updated_at"] = LiteralValue("datetime('now')")
+    sql, params = dynamic_update("retailclaw_loyalty_member", data, where={"id": member_id})
+    conn.execute(sql, params)
     audit(conn, "retailclaw_loyalty_member", member_id, "retail-update-loyalty-member", None, {"updated_fields": changed})
     conn.commit()
     ok({"id": member_id, "updated_fields": changed})
@@ -237,30 +236,34 @@ def get_loyalty_member(conn, args):
 # 7. list-loyalty-members
 # ===========================================================================
 def list_loyalty_members(conn, args):
-    where, params = ["1=1"], []
+    t = Table("retailclaw_loyalty_member")
+    q = Q.from_(t).select(t.star)
+    qc = Q.from_(t).select(fn.Count("*"))
+    params = []
     if getattr(args, "company_id", None):
-        where.append("company_id = ?")
+        q = q.where(t.company_id == P())
+        qc = qc.where(t.company_id == P())
         params.append(args.company_id)
     if getattr(args, "program_id", None):
-        where.append("program_id = ?")
+        q = q.where(t.program_id == P())
+        qc = qc.where(t.program_id == P())
         params.append(args.program_id)
     if getattr(args, "member_tier", None):
-        where.append("member_tier = ?")
+        q = q.where(t.member_tier == P())
+        qc = qc.where(t.member_tier == P())
         params.append(args.member_tier)
     if getattr(args, "member_status", None):
-        where.append("member_status = ?")
+        q = q.where(t.member_status == P())
+        qc = qc.where(t.member_status == P())
         params.append(args.member_status)
     if getattr(args, "search", None):
-        where.append("(customer_name LIKE ? OR email LIKE ?)")
+        q = q.where((t.customer_name.like(P())) | (t.email.like(P())))
+        qc = qc.where((t.customer_name.like(P())) | (t.email.like(P())))
         params.extend([f"%{args.search}%", f"%{args.search}%"])
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM retailclaw_loyalty_member WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM retailclaw_loyalty_member WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+    total = conn.execute(qc.get_sql(), params).fetchone()[0]
+    q = q.orderby(t.created_at, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -288,11 +291,13 @@ def add_loyalty_points(conn, args):
     new_balance = current_balance + points_val
     new_lifetime = lifetime + points_val
 
-    conn.execute(
-        "UPDATE retailclaw_loyalty_member SET points_balance = ?, lifetime_points = ?, "
-        "last_activity_date = datetime('now'), updated_at = datetime('now') WHERE id = ?",
-        (new_balance, new_lifetime, member_id)
-    )
+    sql, upd_params = dynamic_update("retailclaw_loyalty_member", {
+        "points_balance": new_balance,
+        "lifetime_points": new_lifetime,
+        "last_activity_date": LiteralValue("datetime('now')"),
+        "updated_at": LiteralValue("datetime('now')"),
+    }, where={"id": member_id})
+    conn.execute(sql, upd_params)
 
     txn_id = str(uuid.uuid4())
     sql, _ = insert_row("retailclaw_loyalty_transaction", {"id": P(), "member_id": P(), "transaction_type": P(), "points": P(), "balance_after": P(), "reference_type": P(), "reference_id": P(), "description": P(), "created_at": P()})
@@ -329,11 +334,12 @@ def redeem_loyalty_points(conn, args):
 
     new_balance = current_balance - points_val
 
-    conn.execute(
-        "UPDATE retailclaw_loyalty_member SET points_balance = ?, "
-        "last_activity_date = datetime('now'), updated_at = datetime('now') WHERE id = ?",
-        (new_balance, member_id)
-    )
+    sql, upd_params = dynamic_update("retailclaw_loyalty_member", {
+        "points_balance": new_balance,
+        "last_activity_date": LiteralValue("datetime('now')"),
+        "updated_at": LiteralValue("datetime('now')"),
+    }, where={"id": member_id})
+    conn.execute(sql, upd_params)
 
     txn_id = str(uuid.uuid4())
     sql, _ = insert_row("retailclaw_loyalty_transaction", {"id": P(), "member_id": P(), "transaction_type": P(), "points": P(), "balance_after": P(), "reference_type": P(), "reference_id": P(), "description": P(), "created_at": P()})
@@ -450,10 +456,12 @@ def redeem_gift_card(conn, args):
     new_status = "redeemed" if new_balance == Decimal("0.00") else "active"
 
     actual_gc_id = data["id"]
-    conn.execute(
-        "UPDATE retailclaw_gift_card SET current_balance = ?, card_status = ?, updated_at = datetime('now') WHERE id = ?",
-        (str(new_balance), new_status, actual_gc_id)
-    )
+    sql, upd_params = dynamic_update("retailclaw_gift_card", {
+        "current_balance": str(new_balance),
+        "card_status": new_status,
+        "updated_at": LiteralValue("datetime('now')"),
+    }, where={"id": actual_gc_id})
+    conn.execute(sql, upd_params)
     audit(conn, "retailclaw_gift_card", actual_gc_id, "retail-redeem-gift-card", None)
     conn.commit()
     ok({

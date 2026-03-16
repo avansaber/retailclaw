@@ -312,7 +312,7 @@ def status_action(conn, args):
         "retailclaw_exchange",
     ]:
         try:
-            count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            count = conn.execute(Q.from_(Table(table)).select(fn.Count("*")).get_sql()).fetchone()[0]
             table_counts[table] = count
         except Exception:
             table_counts[table] = "missing"
