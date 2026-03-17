@@ -17,7 +17,7 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, LiteralValue, insert_row, update_row, dynamic_update
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, LiteralValue, insert_row, update_row, dynamic_update, now
 
     ENTITY_PREFIXES.setdefault("retailclaw_wholesale_customer", "WSCUST-")
     ENTITY_PREFIXES.setdefault("retailclaw_wholesale_order", "WSO-")
@@ -74,7 +74,7 @@ def add_wholesale_customer(conn, args):
 
     wc_id = str(uuid.uuid4())
     naming = get_next_name(conn, "retailclaw_wholesale_customer", company_id=args.company_id)
-    now = _now_iso()
+    _ts = _now_iso()
 
     sql, _ = insert_row("retailclaw_wholesale_customer", {"id": P(), "naming_series": P(), "customer_id": P(), "business_name": P(), "contact_name": P(), "email": P(), "phone": P(), "tax_id": P(), "credit_limit": P(), "payment_terms": P(), "discount_pct": P(), "address_line1": P(), "address_line2": P(), "city": P(), "state": P(), "zip_code": P(), "wholesale_status": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
     conn.execute(sql, (
@@ -91,7 +91,7 @@ def add_wholesale_customer(conn, args):
         getattr(args, "city", None),
         getattr(args, "state", None),
         getattr(args, "zip_code", None),
-        "active", args.company_id, now, now,
+        "active", args.company_id, _ts, _ts,
     ))
     audit(conn, "retailclaw_wholesale_customer", wc_id, "retail-add-wholesale-customer", args.company_id)
     conn.commit()
@@ -137,7 +137,7 @@ def update_wholesale_customer(conn, args):
     if not data:
         err("No fields to update")
 
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = now()
     sql, params = dynamic_update("retailclaw_wholesale_customer", data, where={"id": wc_id})
     conn.execute(sql, params)
     audit(conn, "retailclaw_wholesale_customer", wc_id, "retail-update-wholesale-customer", None, {"updated_fields": changed})
@@ -196,7 +196,7 @@ def add_wholesale_price(conn, args):
             err(f"Item {item_id} not found")
 
     wp_id = str(uuid.uuid4())
-    now = _now_iso()
+    _ts = _now_iso()
     sql, _ = insert_row("retailclaw_wholesale_price", {"id": P(), "wholesale_customer_id": P(), "item_id": P(), "item_name": P(), "wholesale_rate": P(), "min_order_qty": P(), "currency": P(), "valid_from": P(), "valid_to": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
     conn.execute(sql, (
         wp_id, wc_id, item_id,
@@ -206,7 +206,7 @@ def add_wholesale_price(conn, args):
         getattr(args, "currency", None) or "USD",
         getattr(args, "valid_from", None),
         getattr(args, "valid_to", None),
-        args.company_id, now, now,
+        args.company_id, _ts, _ts,
     ))
     audit(conn, "retailclaw_wholesale_price", wp_id, "retail-add-wholesale-price", args.company_id)
     conn.commit()
@@ -263,7 +263,7 @@ def add_wholesale_order(conn, args):
 
     wo_id = str(uuid.uuid4())
     naming = get_next_name(conn, "retailclaw_wholesale_order", company_id=args.company_id)
-    now = _now_iso()
+    _ts = _now_iso()
 
     sql, _ = insert_row("retailclaw_wholesale_order", {"id": P(), "naming_series": P(), "wholesale_customer_id": P(), "order_date": P(), "expected_delivery_date": P(), "subtotal": P(), "discount_amount": P(), "tax_amount": P(), "total": P(), "notes": P(), "order_status": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
     conn.execute(sql, (
@@ -271,7 +271,7 @@ def add_wholesale_order(conn, args):
         getattr(args, "expected_delivery_date", None),
         "0.00", "0.00", "0.00", "0.00",
         getattr(args, "notes", None),
-        "draft", args.company_id, now, now,
+        "draft", args.company_id, _ts, _ts,
     ))
     audit(conn, "retailclaw_wholesale_order", wo_id, "retail-add-wholesale-order", args.company_id)
     conn.commit()
@@ -360,26 +360,26 @@ def add_wholesale_order_item(conn, args):
             err(f"Item {item_id} not found")
 
     oi_id = str(uuid.uuid4())
-    now = _now_iso()
+    _ts = _now_iso()
     sql, _ = insert_row("retailclaw_wholesale_order_item", {"id": P(), "order_id": P(), "item_id": P(), "item_name": P(), "qty": P(), "rate": P(), "amount": P(), "notes": P(), "created_at": P(), "updated_at": P()})
     conn.execute(sql, (
         oi_id, order_id, item_id, item_name, qty,
         str(rate_dec), str(amount_dec),
         getattr(args, "notes", None),
-        now, now,
+        _ts, _ts,
     ))
 
     # Recalculate order totals
     woi = Table("retailclaw_wholesale_order_item")
     total_rows = conn.execute(
-        Q.from_(woi).select(fn.Coalesce(fn.Sum(LiteralValue("CAST(amount AS REAL)")), 0)).where(woi.order_id == P()).get_sql(),
+        Q.from_(woi).select(fn.Coalesce(fn.Sum(LiteralValue("CAST(amount AS NUMERIC)")), 0)).where(woi.order_id == P()).get_sql(),
         (order_id,)
     ).fetchone()
     new_subtotal = round_currency(to_decimal(str(total_rows[0])))
     sql, upd_params = dynamic_update("retailclaw_wholesale_order", {
         "subtotal": str(new_subtotal),
         "total": str(new_subtotal),
-        "updated_at": LiteralValue("datetime('now')"),
+        "updated_at": now(),
     }, where={"id": order_id})
     conn.execute(sql, upd_params)
 

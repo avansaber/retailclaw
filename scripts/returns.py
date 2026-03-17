@@ -18,7 +18,7 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, LiteralValue, insert_row, update_row, dynamic_update
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, LiteralValue, insert_row, update_row, dynamic_update, now
 
     ENTITY_PREFIXES.setdefault("retailclaw_return_authorization", "RMA-")
 except ImportError:
@@ -86,7 +86,7 @@ def add_return_authorization(conn, args):
 
     ra_id = str(uuid.uuid4())
     naming = get_next_name(conn, "retailclaw_return_authorization", company_id=args.company_id)
-    now = _now_iso()
+    _ts = _now_iso()
 
     sql, _ = insert_row("retailclaw_return_authorization", {"id": P(), "naming_series": P(), "customer_id": P(), "customer_name": P(), "return_date": P(), "reason": P(), "return_type": P(), "original_invoice_id": P(), "subtotal": P(), "restocking_fee": P(), "refund_amount": P(), "notes": P(), "return_status": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
     conn.execute(sql, (
@@ -98,7 +98,7 @@ def add_return_authorization(conn, args):
         getattr(args, "original_invoice_id", None),
         "0.00", "0.00", "0.00",
         getattr(args, "notes", None),
-        "pending", args.company_id, now, now,
+        "pending", args.company_id, _ts, _ts,
     ))
     audit(conn, "retailclaw_return_authorization", ra_id, "retail-add-return-authorization", args.company_id)
     conn.commit()
@@ -142,7 +142,7 @@ def update_return_authorization(conn, args):
     if not data:
         err("No fields to update")
 
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = now()
     sql, params = dynamic_update("retailclaw_return_authorization", data, where={"id": return_id})
     conn.execute(sql, params)
     audit(conn, "retailclaw_return_authorization", return_id, "retail-update-return-authorization", None, {"updated_fields": changed})
@@ -237,19 +237,19 @@ def add_return_item(conn, args):
             err(f"Item {item_id} not found")
 
     ri_id = str(uuid.uuid4())
-    now = _now_iso()
+    _ts = _now_iso()
     sql, _ = insert_row("retailclaw_return_item", {"id": P(), "return_id": P(), "item_id": P(), "item_name": P(), "qty": P(), "rate": P(), "amount": P(), "reason": P(), "item_condition": P(), "disposition": P(), "created_at": P(), "updated_at": P()})
     conn.execute(sql, (
         ri_id, return_id, item_id, item_name, qty,
         str(rate_dec), str(amount_dec),
         getattr(args, "reason", None),
-        item_condition, disposition, now, now,
+        item_condition, disposition, _ts, _ts,
     ))
 
     # Recalculate return subtotal and refund
     ri = Table("retailclaw_return_item")
     total_rows = conn.execute(
-        Q.from_(ri).select(fn.Coalesce(fn.Sum(LiteralValue("CAST(amount AS REAL)")), 0)).where(ri.return_id == P()).get_sql(),
+        Q.from_(ri).select(fn.Coalesce(fn.Sum(LiteralValue("CAST(amount AS NUMERIC)")), 0)).where(ri.return_id == P()).get_sql(),
         (return_id,)
     ).fetchone()
     new_subtotal = round_currency(to_decimal(str(total_rows[0])))
@@ -260,7 +260,7 @@ def add_return_item(conn, args):
     sql, upd_params = dynamic_update("retailclaw_return_authorization", {
         "subtotal": str(new_subtotal),
         "refund_amount": str(refund),
-        "updated_at": LiteralValue("datetime('now')"),
+        "updated_at": now(),
     }, where={"id": return_id})
     conn.execute(sql, upd_params)
 
@@ -393,7 +393,7 @@ def process_return(conn, args):
 
     sql, upd_params = dynamic_update("retailclaw_return_authorization", {
         "return_status": new_status,
-        "updated_at": LiteralValue("datetime('now')"),
+        "updated_at": now(),
     }, where={"id": return_id})
     conn.execute(sql, upd_params)
 
@@ -439,7 +439,7 @@ def process_return(conn, args):
             if gl_ids:
                 sql_gl, gl_params = dynamic_update("retailclaw_return_authorization", {
                     "gl_entry_ids": json.dumps(gl_ids),
-                    "updated_at": LiteralValue("datetime('now')"),
+                    "updated_at": now(),
                 }, where={"id": return_id})
                 conn.execute(sql_gl, gl_params)
         except Exception as e:
@@ -491,7 +491,7 @@ def add_exchange(conn, args):
     price_difference = getattr(args, "price_difference", None) or "0"
 
     ex_id = str(uuid.uuid4())
-    now = _now_iso()
+    _ts = _now_iso()
     sql, _ = insert_row("retailclaw_exchange", {"id": P(), "return_id": P(), "original_item_id": P(), "original_item_name": P(), "new_item_id": P(), "new_item_name": P(), "qty": P(), "price_difference": P(), "exchange_status": P(), "notes": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
     conn.execute(sql, (
         ex_id, return_id, original_item_id,
@@ -501,7 +501,7 @@ def add_exchange(conn, args):
         str(round_currency(to_decimal(price_difference))),
         "pending",
         getattr(args, "notes", None),
-        args.company_id, now, now,
+        args.company_id, _ts, _ts,
     ))
     audit(conn, "retailclaw_exchange", ex_id, "retail-add-exchange", args.company_id)
     conn.commit()

@@ -43,7 +43,7 @@ def channel_performance(conn, args):
         SELECT pl.name AS channel_name,
                pl.price_list_type,
                COUNT(pli.id) AS item_count,
-               COALESCE(SUM(CAST(pli.rate AS REAL)), 0) AS total_value,
+               COALESCE(SUM(CAST(pli.rate AS NUMERIC)), 0) AS total_value,
                pl.status
         FROM retailclaw_price_list pl
         LEFT JOIN retailclaw_price_list_item pli ON pli.price_list_id = pl.id
@@ -271,7 +271,7 @@ def inventory_turnover(conn, args):
     rows = conn.execute(f"""
         SELECT woi.item_name,
                SUM(woi.qty) AS total_qty,
-               SUM(CAST(woi.amount AS REAL)) AS total_amount,
+               SUM(CAST(woi.amount AS NUMERIC)) AS total_amount,
                COUNT(DISTINCT wo.id) AS order_count
         FROM retailclaw_wholesale_order_item woi
         JOIN retailclaw_wholesale_order wo ON wo.id = woi.order_id
