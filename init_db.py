@@ -531,6 +531,38 @@ def create_retailclaw_tables(db_path=None):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_rc_exchange_company ON retailclaw_exchange(company_id)")
     indexes_created += 2
 
+    # ==================================================================
+    # DOMAIN 6: MULTI-LOCATION (1 table)
+    # ==================================================================
+
+    # 20. retailclaw_store_location
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS retailclaw_store_location (
+            id              TEXT PRIMARY KEY,
+            company_id      TEXT NOT NULL REFERENCES company(id),
+            name            TEXT NOT NULL,
+            store_code      TEXT,
+            warehouse_id    TEXT,
+            address         TEXT,
+            city            TEXT,
+            state           TEXT,
+            zip             TEXT,
+            store_type      TEXT DEFAULT 'retail'
+                            CHECK (store_type IN ('retail','warehouse','distribution_center','online')),
+            manager_name    TEXT,
+            phone           TEXT,
+            status          TEXT DEFAULT 'active'
+                            CHECK (status IN ('active','inactive','closed')),
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    tables_created += 1
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_rc_store_loc_company ON retailclaw_store_location(company_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_rc_store_loc_status ON retailclaw_store_location(status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_rc_store_loc_type ON retailclaw_store_location(store_type)")
+    indexes_created += 3
+
     conn.commit()
     conn.close()
 

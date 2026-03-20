@@ -39,6 +39,8 @@ from merchandising import ACTIONS as MERCHANDISING_ACTIONS
 from wholesale import ACTIONS as WHOLESALE_ACTIONS
 from returns import ACTIONS as RETURNS_ACTIONS
 from reports import ACTIONS as REPORTS_ACTIONS
+from locations import ACTIONS as LOCATIONS_ACTIONS
+from ecommerce import ACTIONS as ECOMMERCE_ACTIONS
 
 # ---------------------------------------------------------------------------
 # Merge all domain actions into one router
@@ -53,6 +55,8 @@ ACTIONS.update(MERCHANDISING_ACTIONS)
 ACTIONS.update(WHOLESALE_ACTIONS)
 ACTIONS.update(RETURNS_ACTIONS)
 ACTIONS.update(REPORTS_ACTIONS)
+ACTIONS.update(LOCATIONS_ACTIONS)
+ACTIONS.update(ECOMMERCE_ACTIONS)
 
 
 def main():
@@ -182,6 +186,22 @@ def main():
     parser.add_argument("--new-item-id")
     parser.add_argument("--new-item-name")
     parser.add_argument("--price-difference")
+
+    # ── LOCATIONS domain ─────────────────────────────────────────────
+    parser.add_argument("--store-location-id")
+    parser.add_argument("--store-code")
+    parser.add_argument("--warehouse-id")
+    parser.add_argument("--store-type")
+    parser.add_argument("--manager-name")
+    parser.add_argument("--location-status")
+    parser.add_argument("--from-location-id")
+    parser.add_argument("--to-location-id")
+
+    # ── ECOMMERCE domain ──────────────────────────────────────────
+    parser.add_argument("--channel")
+    parser.add_argument("--order-id")
+    parser.add_argument("--tracking-number")
+    parser.add_argument("--carrier")
 
     # ── GL Posting (optional, for process-return) ──────────────────
     parser.add_argument("--sales-returns-account-id", help="GL account for Sales Returns & Allowances (debit)")
