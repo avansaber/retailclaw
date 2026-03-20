@@ -563,6 +563,61 @@ def create_retailclaw_tables(db_path=None):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_rc_store_loc_type ON retailclaw_store_location(store_type)")
     indexes_created += 3
 
+    # ==================================================================
+    # DOMAIN 7: SHRINKAGE / LOSS PREVENTION (1 table)
+    # ==================================================================
+
+    # 21. retailclaw_shrinkage
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS retailclaw_shrinkage (
+            id                  TEXT PRIMARY KEY,
+            store_location_id   TEXT,
+            item_id             TEXT,
+            quantity            TEXT NOT NULL,
+            cause               TEXT NOT NULL
+                                CHECK(cause IN ('theft','damage','spoilage','admin_error','vendor_fraud','unknown')),
+            discovered_date     TEXT NOT NULL,
+            reported_by         TEXT,
+            value_lost          TEXT DEFAULT '0',
+            notes               TEXT,
+            company_id          TEXT NOT NULL REFERENCES company(id),
+            created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    tables_created += 1
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_rc_shrinkage_company ON retailclaw_shrinkage(company_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_rc_shrinkage_store ON retailclaw_shrinkage(store_location_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_rc_shrinkage_cause ON retailclaw_shrinkage(cause)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_rc_shrinkage_date ON retailclaw_shrinkage(discovered_date)")
+    indexes_created += 4
+
+    # ==================================================================
+    # DOMAIN 8: STORE CREDIT (1 table)
+    # ==================================================================
+
+    # 22. retailclaw_store_credit
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS retailclaw_store_credit (
+            id                  TEXT PRIMARY KEY,
+            customer_id         TEXT NOT NULL,
+            original_amount     TEXT NOT NULL DEFAULT '0',
+            remaining_balance   TEXT NOT NULL DEFAULT '0',
+            issued_date         TEXT NOT NULL,
+            expiration_date     TEXT,
+            source              TEXT CHECK(source IN ('return','promotion','adjustment','gift')),
+            source_reference_id TEXT,
+            status              TEXT DEFAULT 'active'
+                                CHECK(status IN ('active','redeemed','expired')),
+            company_id          TEXT NOT NULL REFERENCES company(id),
+            created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    tables_created += 1
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_rc_store_credit_company ON retailclaw_store_credit(company_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_rc_store_credit_customer ON retailclaw_store_credit(customer_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_rc_store_credit_status ON retailclaw_store_credit(status)")
+    indexes_created += 3
+
     conn.commit()
     conn.close()
 

@@ -41,6 +41,7 @@ from returns import ACTIONS as RETURNS_ACTIONS
 from reports import ACTIONS as REPORTS_ACTIONS
 from locations import ACTIONS as LOCATIONS_ACTIONS
 from ecommerce import ACTIONS as ECOMMERCE_ACTIONS
+from procurement import ACTIONS as PROCUREMENT_ACTIONS
 
 # ---------------------------------------------------------------------------
 # Merge all domain actions into one router
@@ -57,6 +58,7 @@ ACTIONS.update(RETURNS_ACTIONS)
 ACTIONS.update(REPORTS_ACTIONS)
 ACTIONS.update(LOCATIONS_ACTIONS)
 ACTIONS.update(ECOMMERCE_ACTIONS)
+ACTIONS.update(PROCUREMENT_ACTIONS)
 
 
 def main():
@@ -202,6 +204,15 @@ def main():
     parser.add_argument("--order-id")
     parser.add_argument("--tracking-number")
     parser.add_argument("--carrier")
+
+    # ── PROCUREMENT / SHRINKAGE / STORE CREDIT ──────────────────────
+    parser.add_argument("--cause")
+    parser.add_argument("--discovered-date")
+    parser.add_argument("--reported-by")
+    parser.add_argument("--value-lost")
+    parser.add_argument("--store-credit-id")
+    parser.add_argument("--source")
+    parser.add_argument("--category-id")
 
     # ── GL Posting (optional, for process-return) ──────────────────
     parser.add_argument("--sales-returns-account-id", help="GL account for Sales Returns & Allowances (debit)")
