@@ -212,7 +212,6 @@ def main():
     parser.add_argument("--value-lost")
     parser.add_argument("--store-credit-id")
     parser.add_argument("--source")
-    parser.add_argument("--category-id")
 
     # ── GL Posting (optional, for process-return) ──────────────────
     parser.add_argument("--sales-returns-account-id", help="GL account for Sales Returns & Allowances (debit)")
