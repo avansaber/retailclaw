@@ -1,6 +1,6 @@
 # RetailClaw
 
-Retail management for [ERPClaw](https://github.com/avansaber/erpclaw). Pricing and promotions, loyalty programs, visual merchandising, wholesale/B2B operations, and returns and exchanges. 57 actions across 6 domains.
+Retail management for [ERPClaw](https://github.com/avansaber/erpclaw). Pricing and promotions, loyalty programs, visual merchandising, wholesale/B2B operations, and returns and exchanges. <!-- SYNC:value:module.retailclaw.actions -->88<!-- /SYNC --> actions across 6 domains.
 
 ## Features
 
