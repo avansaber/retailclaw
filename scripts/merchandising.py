@@ -1,7 +1,9 @@
 """RetailClaw -- merchandising domain module
 
-Actions for categories, planograms, and displays (4 tables, 8 actions).
+Actions for categories and planograms (3 tables, 8 actions).
 Imported by db_query.py (unified router).
+(No display actions were ever built; the retailclaw_display table was dropped
+2026-07-02 in M31 H2 — see migration 001.)
 """
 import json
 import os
@@ -29,8 +31,8 @@ _now_iso = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 # Validation constants
 # ---------------------------------------------------------------------------
 VALID_PLANOGRAM_STATUSES = ("draft", "active", "archived")
-VALID_DISPLAY_TYPES = ("endcap", "island", "window", "counter", "pegboard", "shelf", "floor", "wall")
-VALID_DISPLAY_STATUSES = ("planned", "active", "inactive", "archived")
+# VALID_DISPLAY_* constants removed 2026-07-02 (M31 H2): no display actions ever
+# referenced them; the retailclaw_display table was dropped (migration 001).
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 ---
 name: retailclaw
-version: 1.0.0
+version: 1.1.0
 description: Retail Management -- 87 actions across 9 domains. Pricing, promotions, loyalty programs, gift cards, merchandising, planograms, wholesale/B2B, returns/exchanges, store locations, multi-channel, procurement, and analytics.
 author: AvanSaber
 homepage: https://github.com/avansaber/retailclaw

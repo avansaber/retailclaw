@@ -321,29 +321,11 @@ def create_retailclaw_tables(db_path=None):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_rc_plano_item_item ON retailclaw_planogram_item(item_id)")
     indexes_created += 2
 
-    # 12. retailclaw_display
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS retailclaw_display (
-            id              TEXT PRIMARY KEY,
-            name            TEXT NOT NULL,
-            display_type    TEXT NOT NULL DEFAULT 'endcap'
-                            CHECK(display_type IN ('endcap','island','window','counter','pegboard','shelf','floor','wall')),
-            location        TEXT,
-            description     TEXT,
-            start_date      TEXT,
-            end_date        TEXT,
-            promotion_id    TEXT REFERENCES retailclaw_promotion(id),
-            display_status  TEXT NOT NULL DEFAULT 'planned'
-                            CHECK(display_status IN ('planned','active','inactive','archived')),
-            company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    tables_created += 1
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_rc_display_company ON retailclaw_display(company_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_rc_display_promo ON retailclaw_display(promotion_id)")
-    indexes_created += 2
+    # 12. retailclaw_display removed 2026-07-02 (M31 H2 / migration 001). Zero
+    # actions ever existed for it. Register shows writers and readers both empty.
+    # The merchandising story is carried by retailclaw_planogram plus
+    # retailclaw_planogram_item. Dropped from existing DBs by this module's
+    # migration 001.
 
     # ==================================================================
     # DOMAIN 4: WHOLESALE (4 tables)

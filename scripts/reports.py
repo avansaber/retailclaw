@@ -305,7 +305,7 @@ def status_action(conn, args):
         "retailclaw_loyalty_program", "retailclaw_loyalty_member",
         "retailclaw_loyalty_transaction", "retailclaw_gift_card",
         "retailclaw_category", "retailclaw_planogram",
-        "retailclaw_planogram_item", "retailclaw_display",
+        "retailclaw_planogram_item",
         "retailclaw_wholesale_customer", "retailclaw_wholesale_price",
         "retailclaw_wholesale_order", "retailclaw_wholesale_order_item",
         "retailclaw_return_authorization", "retailclaw_return_item",

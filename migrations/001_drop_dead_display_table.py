@@ -1,0 +1,81 @@
+"""retailclaw migration 001: drop the dead retailclaw_display table (M31 H2 / audit B7).
+
+retailclaw_display was defined in init_db but ZERO actions were ever built for it
+(register: writers=[], readers=[]). The `merchandising.py` docstring claimed
+"displays" among its actions, but the ACTIONS dict only ever routed category and
+planogram actions; the display story is carried by retailclaw_planogram +
+retailclaw_planogram_item. Removed from init_db for fresh installs; this drops it
+from existing DBs so fresh == migrated. (Docstring + reports.py status list also
+corrected in the same M31 H2 change.)
+
+This is retailclaw's first migration. Idempotent (DROP IF EXISTS), dialect-aware.
+No inbound FKs (SIM-verified). Forward-only: the table is empty (no code ever
+wrote it), so there is no data to preserve.
+"""
+import argparse
+import os
+import sqlite3
+
+DEFAULT_DB_PATH = os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "data.sqlite")
+_DROP_ORDER = [
+    "retailclaw_display",
+]
+
+
+def _get_dialect():
+    return os.environ.get("ERPCLAW_DB_DIALECT", "sqlite")
+
+
+def _run_sqlite(path):
+    conn = sqlite3.connect(path)
+    try:
+        from erpclaw_lib.db import setup_pragmas
+        setup_pragmas(conn)
+    except ImportError:
+        conn.execute("PRAGMA busy_timeout=5000")
+    dropped = []
+    for t in _DROP_ORDER:
+        existed = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (t,)).fetchone()
+        conn.execute(f"DROP TABLE IF EXISTS {t}")
+        if existed:
+            dropped.append(t)
+    conn.commit()
+    conn.close()
+    print(f"  dropped: {', '.join(dropped) if dropped else '(none — already absent)'}")
+
+
+def _run_postgres(url):
+    import psycopg2
+    conn = psycopg2.connect(url)
+    try:
+        with conn.cursor() as cur:
+            for t in _DROP_ORDER:
+                cur.execute(f"DROP TABLE IF EXISTS {t}")
+        conn.commit()
+        print("  Postgres: dead display table dropped (if present).")
+    finally:
+        conn.close()
+
+
+def run_migration(db_path=None):
+    if _get_dialect() == "postgresql":
+        url = os.environ.get("ERPCLAW_DB_URL") or db_path
+        if not url:
+            print("Postgres dialect set but no connection URL (ERPCLAW_DB_URL). Nothing to migrate.")
+            return
+        _run_postgres(url)
+        return
+    path = db_path or os.environ.get("ERPCLAW_DB_PATH", DEFAULT_DB_PATH)
+    if not os.path.exists(path):
+        print(f"Database not found at {path}. Nothing to migrate.")
+        return
+    _run_sqlite(path)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="retailclaw migration 001: drop dead display table")
+    parser.add_argument("--db-path", default=DEFAULT_DB_PATH)
+    args = parser.parse_args()
+    run_migration(args.db_path)
+    print("retailclaw migration 001 complete.")
