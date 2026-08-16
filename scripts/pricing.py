@@ -11,13 +11,15 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 try:
-    sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
+    import importlib.util
+    if importlib.util.find_spec("erpclaw_lib") is None:
+        sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
     from erpclaw_lib.db import get_connection
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, LiteralValue, insert_row, update_row, dynamic_update
+    from erpclaw_lib.query import Field, Order, P, Q, Table, dynamic_update, fn, insert_row, now as sql_now, update_row
 
     ENTITY_PREFIXES.setdefault("retailclaw_price_list", "RPL-")
     ENTITY_PREFIXES.setdefault("retailclaw_promotion", "PROMO-")
@@ -119,7 +121,7 @@ def update_price_list(conn, args):
     if not data:
         err("No fields to update")
 
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = sql_now()
     sql, params = dynamic_update("retailclaw_price_list", data, where={"id": pl_id})
     conn.execute(sql, params)
     audit(conn, "retailclaw_price_list", pl_id, "retail-update-price-list", None, {"updated_fields": changed})
@@ -245,7 +247,7 @@ def update_price_list_item(conn, args):
     if not data:
         err("No fields to update")
 
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = sql_now()
     sql, params = dynamic_update("retailclaw_price_list_item", data, where={"id": pli_id})
     conn.execute(sql, params)
     audit(conn, "retailclaw_price_list_item", pli_id, "retail-update-price-list-item", None, {"updated_fields": changed})
@@ -380,7 +382,7 @@ def update_promotion(conn, args):
     if not data:
         err("No fields to update")
 
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = sql_now()
     sql, params = dynamic_update("retailclaw_promotion", data, where={"id": promo_id})
     conn.execute(sql, params)
     audit(conn, "retailclaw_promotion", promo_id, "retail-update-promotion", None, {"updated_fields": changed})
@@ -438,7 +440,7 @@ def activate_promotion(conn, args):
 
     sql, upd_params = dynamic_update("retailclaw_promotion", {
         "promo_status": "active",
-        "updated_at": LiteralValue("datetime('now')"),
+        "updated_at": sql_now(),
     }, where={"id": promo_id})
     conn.execute(sql, upd_params)
     audit(conn, "retailclaw_promotion", promo_id, "retail-activate-promotion", None)
@@ -461,7 +463,7 @@ def deactivate_promotion(conn, args):
 
     sql, upd_params = dynamic_update("retailclaw_promotion", {
         "promo_status": "paused",
-        "updated_at": LiteralValue("datetime('now')"),
+        "updated_at": sql_now(),
     }, where={"id": promo_id})
     conn.execute(sql, upd_params)
     audit(conn, "retailclaw_promotion", promo_id, "retail-deactivate-promotion", None)

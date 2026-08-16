@@ -12,13 +12,15 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 try:
-    sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
+    import importlib.util
+    if importlib.util.find_spec("erpclaw_lib") is None:
+        sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
     from erpclaw_lib.db import get_connection
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, LiteralValue, insert_row, update_row, dynamic_update
+    from erpclaw_lib.query import Field, Order, P, Q, Table, dynamic_update, fn, insert_row, now as sql_now, update_row
 
     ENTITY_PREFIXES.setdefault("retailclaw_loyalty_program", "LPROG-")
     ENTITY_PREFIXES.setdefault("retailclaw_loyalty_member", "LMEM-")
@@ -211,7 +213,7 @@ def update_loyalty_member(conn, args):
     if not data:
         err("No fields to update")
 
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = sql_now()
     sql, params = dynamic_update("retailclaw_loyalty_member", data, where={"id": member_id})
     conn.execute(sql, params)
     audit(conn, "retailclaw_loyalty_member", member_id, "retail-update-loyalty-member", None, {"updated_fields": changed})
@@ -294,8 +296,8 @@ def add_loyalty_points(conn, args):
     sql, upd_params = dynamic_update("retailclaw_loyalty_member", {
         "points_balance": new_balance,
         "lifetime_points": new_lifetime,
-        "last_activity_date": LiteralValue("datetime('now')"),
-        "updated_at": LiteralValue("datetime('now')"),
+        "last_activity_date": sql_now(),
+        "updated_at": sql_now(),
     }, where={"id": member_id})
     conn.execute(sql, upd_params)
 
@@ -336,8 +338,8 @@ def redeem_loyalty_points(conn, args):
 
     sql, upd_params = dynamic_update("retailclaw_loyalty_member", {
         "points_balance": new_balance,
-        "last_activity_date": LiteralValue("datetime('now')"),
-        "updated_at": LiteralValue("datetime('now')"),
+        "last_activity_date": sql_now(),
+        "updated_at": sql_now(),
     }, where={"id": member_id})
     conn.execute(sql, upd_params)
 
@@ -459,7 +461,7 @@ def redeem_gift_card(conn, args):
     sql, upd_params = dynamic_update("retailclaw_gift_card", {
         "current_balance": str(new_balance),
         "card_status": new_status,
-        "updated_at": LiteralValue("datetime('now')"),
+        "updated_at": sql_now(),
     }, where={"id": actual_gc_id})
     conn.execute(sql, upd_params)
     audit(conn, "retailclaw_gift_card", actual_gc_id, "retail-redeem-gift-card", None)
