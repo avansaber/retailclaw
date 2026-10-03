@@ -24,6 +24,8 @@ except ImportError:
 
 _now_iso = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+SKILL = "retailclaw"
+
 VALID_STORE_TYPES = ("retail", "warehouse", "distribution_center", "online")
 VALID_LOCATION_STATUSES = ("active", "inactive", "closed")
 
@@ -77,7 +79,7 @@ def add_store_location(conn, args):
         getattr(args, "phone", None),
         "active", now, now,
     ))
-    audit(conn, "retailclaw_store_location", loc_id, "retail-add-store-location", args.company_id)
+    audit(conn, SKILL, "retail-add-store-location", "retailclaw_store_location", loc_id)
     conn.commit()
     ok({"id": loc_id, "name": name, "store_type": store_type, "location_status": "active"})
 
@@ -159,7 +161,8 @@ def update_store_location(conn, args):
     data["updated_at"] = sql_now()
     sql, params = dynamic_update("retailclaw_store_location", data, where={"id": loc_id})
     conn.execute(sql, params)
-    audit(conn, "retailclaw_store_location", loc_id, "retail-update-store-location", None, {"updated_fields": changed})
+    audit(conn, SKILL, "retail-update-store-location", "retailclaw_store_location", loc_id,
+          new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": loc_id, "updated_fields": changed})
 
@@ -273,10 +276,9 @@ def request_inter_store_transfer(conn, args):
     except Exception:
         pass  # stock_entry creation is best-effort; transfer is recorded in response
 
-    audit(conn, "retailclaw_store_location", transfer_id,
-          "retail-request-inter-store-transfer",
-          from_loc["company_id"],
-          {"from": from_loc_id, "to": to_loc_id, "item_id": item_id, "qty": transfer_qty})
+    audit(conn, SKILL, "retail-request-inter-store-transfer", "retailclaw_store_location",
+          transfer_id,
+          new_values={"from": from_loc_id, "to": to_loc_id, "item_id": item_id, "qty": transfer_qty})
     conn.commit()
     ok({
         "transfer_id": transfer_id,

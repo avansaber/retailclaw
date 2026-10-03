@@ -780,17 +780,18 @@ class TestProcessReturn:
         result = call_action(mod.retail_process_return, conn, ns(
             return_id=rid,
             return_status="completed",
-            sales_returns_account_id=None,
-            cash_account_id=None,
+            sales_returns_account_id=env["sales_returns_acct"],
+            cash_account_id=env["cash_acct"],
             inventory_account_id=None,
             cogs_account_id=None,
-            cost_center_id=None,
+            cost_center_id=env["cc"],
             restock_cost=None,
         ))
         assert is_ok(result), result
         assert result["return_status"] == "completed"
         assert result["items_processed"] == 1
         assert Decimal(result["subtotal"]) == Decimal("60.00")
+        assert len(result["gl_entry_ids"]) == 2
 
     def test_process_return_no_items_fails(self, conn, env):
         ra = call_action(mod.retail_add_return_authorization, conn, ns(
@@ -819,16 +820,17 @@ class TestProcessReturn:
     def test_process_already_completed_fails(self, conn, env):
         rid = self._create_return_with_item(conn, env)
         # First process
-        call_action(mod.retail_process_return, conn, ns(
+        first = call_action(mod.retail_process_return, conn, ns(
             return_id=rid,
             return_status="completed",
-            sales_returns_account_id=None,
-            cash_account_id=None,
+            sales_returns_account_id=env["sales_returns_acct"],
+            cash_account_id=env["cash_acct"],
             inventory_account_id=None,
             cogs_account_id=None,
-            cost_center_id=None,
+            cost_center_id=env["cc"],
             restock_cost=None,
         ))
+        assert is_ok(first), first
         # Try to process again
         result = call_action(mod.retail_process_return, conn, ns(
             return_id=rid,
@@ -841,6 +843,7 @@ class TestProcessReturn:
             restock_cost=None,
         ))
         assert is_error(result)
+        assert "already completed" in result["message"]
 
 
 class TestAddExchange:

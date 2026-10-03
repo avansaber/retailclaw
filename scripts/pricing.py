@@ -28,6 +28,8 @@ except ImportError:
 
 _now_iso = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+SKILL = "retailclaw"
+
 # ---------------------------------------------------------------------------
 # Validation constants
 # ---------------------------------------------------------------------------
@@ -81,7 +83,7 @@ def add_price_list(conn, args):
         getattr(args, "valid_to", None),
         "active", args.company_id, now, now,
     ))
-    audit(conn, "retailclaw_price_list", pl_id, "retail-add-price-list", args.company_id)
+    audit(conn, SKILL, "retail-add-price-list", "retailclaw_price_list", pl_id)
     conn.commit()
     ok({"id": pl_id, "naming_series": naming, "name": name, "price_list_status": "active"})
 
@@ -124,7 +126,8 @@ def update_price_list(conn, args):
     data["updated_at"] = sql_now()
     sql, params = dynamic_update("retailclaw_price_list", data, where={"id": pl_id})
     conn.execute(sql, params)
-    audit(conn, "retailclaw_price_list", pl_id, "retail-update-price-list", None, {"updated_fields": changed})
+    audit(conn, SKILL, "retail-update-price-list", "retailclaw_price_list", pl_id,
+          new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": pl_id, "updated_fields": changed})
 
@@ -209,7 +212,7 @@ def add_price_list_item(conn, args):
         getattr(args, "valid_to", None),
         now, now,
     ))
-    audit(conn, "retailclaw_price_list_item", pli_id, "retail-add-price-list-item", None)
+    audit(conn, SKILL, "retail-add-price-list-item", "retailclaw_price_list_item", pli_id)
     conn.commit()
     ok({"id": pli_id, "price_list_id": pl_id, "rate": str(round_currency(to_decimal(rate)))})
 
@@ -250,7 +253,8 @@ def update_price_list_item(conn, args):
     data["updated_at"] = sql_now()
     sql, params = dynamic_update("retailclaw_price_list_item", data, where={"id": pli_id})
     conn.execute(sql, params)
-    audit(conn, "retailclaw_price_list_item", pli_id, "retail-update-price-list-item", None, {"updated_fields": changed})
+    audit(conn, SKILL, "retail-update-price-list-item", "retailclaw_price_list_item", pli_id,
+          new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": pli_id, "updated_fields": changed})
 
@@ -331,7 +335,7 @@ def add_promotion(conn, args):
         start_date, end_date,
         "draft", args.company_id, now, now,
     ))
-    audit(conn, "retailclaw_promotion", promo_id, "retail-add-promotion", args.company_id)
+    audit(conn, SKILL, "retail-add-promotion", "retailclaw_promotion", promo_id)
     conn.commit()
     ok({"id": promo_id, "naming_series": naming, "name": name, "promo_status": "draft"})
 
@@ -385,7 +389,8 @@ def update_promotion(conn, args):
     data["updated_at"] = sql_now()
     sql, params = dynamic_update("retailclaw_promotion", data, where={"id": promo_id})
     conn.execute(sql, params)
-    audit(conn, "retailclaw_promotion", promo_id, "retail-update-promotion", None, {"updated_fields": changed})
+    audit(conn, SKILL, "retail-update-promotion", "retailclaw_promotion", promo_id,
+          new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": promo_id, "updated_fields": changed})
 
@@ -443,7 +448,7 @@ def activate_promotion(conn, args):
         "updated_at": sql_now(),
     }, where={"id": promo_id})
     conn.execute(sql, upd_params)
-    audit(conn, "retailclaw_promotion", promo_id, "retail-activate-promotion", None)
+    audit(conn, SKILL, "retail-activate-promotion", "retailclaw_promotion", promo_id)
     conn.commit()
     ok({"id": promo_id, "promo_status": "active"})
 
@@ -466,7 +471,7 @@ def deactivate_promotion(conn, args):
         "updated_at": sql_now(),
     }, where={"id": promo_id})
     conn.execute(sql, upd_params)
-    audit(conn, "retailclaw_promotion", promo_id, "retail-deactivate-promotion", None)
+    audit(conn, SKILL, "retail-deactivate-promotion", "retailclaw_promotion", promo_id)
     conn.commit()
     ok({"id": promo_id, "promo_status": "paused"})
 

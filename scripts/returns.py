@@ -1,7 +1,7 @@
 """RetailClaw -- returns & exchanges domain module
 
 Actions for return authorizations, return items, and exchanges (3 tables, 8 actions).
-GL posting for returns/refunds: optional integration with erpclaw_lib.gl_posting.
+GL posting for returns/refunds is required for a completed return that moves money: the refund ledger posts in the same transaction or the return is refused and rolled back.
 Imported by db_query.py (unified router).
 """
 import json
@@ -33,6 +33,8 @@ except ImportError:
     HAS_GL = False
 
 _now_iso = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+SKILL = "retailclaw"
 
 # ---------------------------------------------------------------------------
 # Validation constants
@@ -102,7 +104,7 @@ def add_return_authorization(conn, args):
         getattr(args, "notes", None),
         "pending", args.company_id, _ts, _ts,
     ))
-    audit(conn, "retailclaw_return_authorization", ra_id, "retail-add-return-authorization", args.company_id)
+    audit(conn, SKILL, "retail-add-return-authorization", "retailclaw_return_authorization", ra_id)
     conn.commit()
     ok({"id": ra_id, "naming_series": naming, "return_status": "pending", "return_type": return_type})
 
@@ -112,7 +114,7 @@ def add_return_authorization(conn, args):
 # ===========================================================================
 def update_return_authorization(conn, args):
     return_id = getattr(args, "return_id", None)
-    _get_return(conn, return_id)
+    stored_status = row_to_dict(_get_return(conn, return_id)).get("return_status")
 
     data, changed = {}, []
     for arg_name, col_name in {
@@ -141,13 +143,21 @@ def update_return_authorization(conn, args):
         data["restocking_fee"] = str(round_currency(to_decimal(restocking_fee)))
         changed.append("restocking_fee")
 
+    if stored_status == "completed" and set(data) != {"notes"}:
+        err(f"Return {return_id} is completed and its refund is posted; it cannot be changed")
+    if return_status == "completed":
+        err("A return is completed only by retail-process-return, which posts its refund")
+    if stored_status == "cancelled" and return_status is not None and return_status != "cancelled":
+        err(f"Return {return_id} is cancelled and cannot be reopened")
+
     if not data:
         err("No fields to update")
 
     data["updated_at"] = now()
     sql, params = dynamic_update("retailclaw_return_authorization", data, where={"id": return_id})
     conn.execute(sql, params)
-    audit(conn, "retailclaw_return_authorization", return_id, "retail-update-return-authorization", None, {"updated_fields": changed})
+    audit(conn, SKILL, "retail-update-return-authorization", "retailclaw_return_authorization",
+          return_id, new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": return_id, "updated_fields": changed})
 
@@ -266,7 +276,7 @@ def add_return_item(conn, args):
     }, where={"id": return_id})
     conn.execute(sql, upd_params)
 
-    audit(conn, "retailclaw_return_item", ri_id, "retail-add-return-item", None)
+    audit(conn, SKILL, "retail-add-return-item", "retailclaw_return_item", ri_id)
     conn.commit()
     ok({"id": ri_id, "return_id": return_id, "item_name": item_name, "qty": qty, "amount": str(amount_dec)})
 
@@ -308,29 +318,25 @@ def _build_refund_gl_entries(data, args):
         DR: Sales Returns & Allowances  (refund_amount)
         CR: Cash / Accounts Receivable  (refund_amount)
 
-    If items are restocked (disposition='restock'), also post:
-        DR: Inventory                   (cost of restocked items)
-        CR: COGS                        (cost of restocked items)
+    The restock pair is not posted, because it needs a stock ledger entry.
+    Callers refuse restock flags before any write, so reaching here with a
+    positive refund and missing accounts cannot happen.
 
-    Returns (entries, restock_entries) where each is a list of dicts or empty.
+    Returns the primary pair when the refund is positive, else [].
     All amounts are str (Decimal text).
     """
     refund_amount = to_decimal(data.get("refund_amount", "0"))
     if refund_amount <= Decimal("0"):
-        return [], []
+        return []
 
     sales_returns_account_id = getattr(args, "sales_returns_account_id", None)
     cash_account_id = getattr(args, "cash_account_id", None)
     cost_center_id = getattr(args, "cost_center_id", None)
     customer_id = data.get("customer_id")
 
-    # Primary refund entries require both accounts
-    if not sales_returns_account_id or not cash_account_id:
-        return [], []
-
     refund_str = str(round_currency(refund_amount))
 
-    primary_entries = [
+    return [
         {
             "account_id": sales_returns_account_id,
             "debit": refund_str,
@@ -345,32 +351,6 @@ def _build_refund_gl_entries(data, args):
             "party_id": customer_id if customer_id else None,
         },
     ]
-
-    # Inventory restock GL entries (optional, separate entry_set)
-    restock_entries = []
-    inventory_account_id = getattr(args, "inventory_account_id", None)
-    cogs_account_id = getattr(args, "cogs_account_id", None)
-    restock_amount_str = getattr(args, "restock_cost", None)
-
-    if inventory_account_id and cogs_account_id and restock_amount_str:
-        restock_amount = to_decimal(restock_amount_str)
-        if restock_amount > Decimal("0"):
-            cost_str = str(round_currency(restock_amount))
-            restock_entries = [
-                {
-                    "account_id": inventory_account_id,
-                    "debit": cost_str,
-                    "credit": "0",
-                },
-                {
-                    "account_id": cogs_account_id,
-                    "debit": "0",
-                    "credit": cost_str,
-                    "cost_center_id": cost_center_id,
-                },
-            ]
-
-    return primary_entries, restock_entries
 
 
 # ===========================================================================
@@ -393,19 +373,29 @@ def process_return(conn, args):
     new_status = getattr(args, "return_status", None) or "completed"
     _validate_enum(new_status, VALID_RETURN_STATUSES, "return-status")
 
+    if new_status == "completed":
+        refund = to_decimal(data["refund_amount"])
+        if (getattr(args, "inventory_account_id", None) is not None
+                or getattr(args, "cogs_account_id", None) is not None
+                or getattr(args, "restock_cost", None) is not None):
+            err("restock posting is not supported: it would move a stock account with no stock ledger entry; complete the return without --inventory-account-id, --cogs-account-id and --restock-cost")
+        if refund > 0 and (not getattr(args, "sales_returns_account_id", None) or not getattr(args, "cash_account_id", None)):
+            err("--sales-returns-account-id and --cash-account-id are required to complete a return with a refund")
+        if refund > 0 and not HAS_GL:
+            err("GL posting is not available; a return with a refund cannot be completed")
+
     sql, upd_params = dynamic_update("retailclaw_return_authorization", {
         "return_status": new_status,
         "updated_at": now(),
     }, where={"id": return_id})
     conn.execute(sql, upd_params)
 
-    # ── GL Posting (optional, graceful degradation) ──────────────────
+    # Ledger posts in the same transaction or the return is refused.
     gl_ids = []
-    gl_warnings = []
 
-    if HAS_GL and new_status == "completed":
+    if new_status == "completed":
         try:
-            primary_entries, restock_entries = _build_refund_gl_entries(data, args)
+            primary_entries = _build_refund_gl_entries(data, args)
             posting_date = data.get("return_date", _now_iso()[:10])
             company_id = data["company_id"]
 
@@ -414,7 +404,7 @@ def process_return(conn, args):
                 primary_ids = insert_gl_entries(
                     conn,
                     primary_entries,
-                    voucher_type="retail_return",
+                    voucher_type="journal_entry",
                     voucher_id=return_id,
                     posting_date=posting_date,
                     company_id=company_id,
@@ -422,20 +412,6 @@ def process_return(conn, args):
                     entry_set="primary",
                 )
                 gl_ids.extend(primary_ids)
-
-            # Post inventory restock GL entries (Inventory DR / COGS CR)
-            if restock_entries:
-                restock_ids = insert_gl_entries(
-                    conn,
-                    restock_entries,
-                    voucher_type="retail_return",
-                    voucher_id=return_id,
-                    posting_date=posting_date,
-                    company_id=company_id,
-                    remarks=f"RetailClaw return restock: {data.get('naming_series', return_id)}",
-                    entry_set="cogs",
-                )
-                gl_ids.extend(restock_ids)
 
             # Store GL entry IDs on the return authorization
             if gl_ids:
@@ -445,11 +421,10 @@ def process_return(conn, args):
                 }, where={"id": return_id})
                 conn.execute(sql_gl, gl_params)
         except Exception as e:
-            # GL posting failed -- still process the return but note the warning.
-            # This ensures graceful degradation if GL accounts aren't configured.
-            gl_warnings.append(f"GL posting skipped: {str(e)}")
+            conn.rollback()
+            err(f"GL posting failed, return rolled back: {e}")
 
-    audit(conn, "retailclaw_return_authorization", return_id, "retail-process-return", None)
+    audit(conn, SKILL, "retail-process-return", "retailclaw_return_authorization", return_id)
     conn.commit()
 
     result = {
@@ -462,8 +437,6 @@ def process_return(conn, args):
     }
     if gl_ids:
         result["gl_entry_ids"] = gl_ids
-    if gl_warnings:
-        result["gl_warnings"] = gl_warnings
     ok(result)
 
 
@@ -505,7 +478,7 @@ def add_exchange(conn, args):
         getattr(args, "notes", None),
         args.company_id, _ts, _ts,
     ))
-    audit(conn, "retailclaw_exchange", ex_id, "retail-add-exchange", args.company_id)
+    audit(conn, SKILL, "retail-add-exchange", "retailclaw_exchange", ex_id)
     conn.commit()
     ok({"id": ex_id, "return_id": return_id, "new_item_name": new_item_name, "exchange_status": "pending"})
 

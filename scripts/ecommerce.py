@@ -26,6 +26,8 @@ except ImportError:
 
 _now_iso = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+SKILL = "retailclaw"
+
 VALID_CHANNELS = ("shopify", "woocommerce", "amazon", "ebay", "website", "in_store", "other")
 
 
@@ -231,8 +233,8 @@ def fulfill_online_order(conn, args):
         pass
 
     now = _now_iso()
-    audit(conn, "sales_order", order_id, "retail-fulfill-online-order",
-          args.company_id, {"tracking": tracking_number, "carrier": carrier})
+    audit(conn, SKILL, "retail-fulfill-online-order", "sales_order", order_id,
+          new_values={"tracking": tracking_number, "carrier": carrier})
     conn.commit()
     ok({
         "order_id": order_id,

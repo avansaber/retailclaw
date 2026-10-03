@@ -29,6 +29,8 @@ except ImportError:
 
 _now_iso = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+SKILL = "retailclaw"
+
 # ---------------------------------------------------------------------------
 # Validation constants
 # ---------------------------------------------------------------------------
@@ -76,7 +78,7 @@ def add_category(conn, args):
         int(getattr(args, "sort_order", None) or 0),
         1, args.company_id, now, now,
     ))
-    audit(conn, "retailclaw_category", cat_id, "retail-add-category", args.company_id)
+    audit(conn, SKILL, "retail-add-category", "retailclaw_category", cat_id)
     conn.commit()
     ok({"id": cat_id, "name": name, "parent_id": parent_id})
 
@@ -126,7 +128,8 @@ def update_category(conn, args):
     data["updated_at"] = sql_now()
     sql, params = dynamic_update("retailclaw_category", data, where={"id": cat_id})
     conn.execute(sql, params)
-    audit(conn, "retailclaw_category", cat_id, "retail-update-category", None, {"updated_fields": changed})
+    audit(conn, SKILL, "retail-update-category", "retailclaw_category", cat_id,
+          new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": cat_id, "updated_fields": changed})
 
@@ -189,7 +192,7 @@ def add_planogram(conn, args):
         getattr(args, "effective_date", None),
         args.company_id, now, now,
     ))
-    audit(conn, "retailclaw_planogram", plano_id, "retail-add-planogram", args.company_id)
+    audit(conn, SKILL, "retail-add-planogram", "retailclaw_planogram", plano_id)
     conn.commit()
     ok({"id": plano_id, "naming_series": naming, "name": name, "planogram_status": "draft"})
 
@@ -233,7 +236,8 @@ def update_planogram(conn, args):
     data["updated_at"] = sql_now()
     sql, params = dynamic_update("retailclaw_planogram", data, where={"id": plano_id})
     conn.execute(sql, params)
-    audit(conn, "retailclaw_planogram", plano_id, "retail-update-planogram", None, {"updated_fields": changed})
+    audit(conn, SKILL, "retail-update-planogram", "retailclaw_planogram", plano_id,
+          new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": plano_id, "updated_fields": changed})
 
@@ -298,7 +302,7 @@ def add_planogram_item(conn, args):
         getattr(args, "notes", None),
         now, now,
     ))
-    audit(conn, "retailclaw_planogram_item", pi_id, "retail-add-planogram-item", None)
+    audit(conn, SKILL, "retail-add-planogram-item", "retailclaw_planogram_item", pi_id)
     conn.commit()
     ok({"id": pi_id, "planogram_id": plano_id, "item_name": getattr(args, "item_name", None)})
 

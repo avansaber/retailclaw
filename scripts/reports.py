@@ -17,6 +17,7 @@ try:
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
+    from erpclaw_lib.query_helpers import resolve_scope_company
 except ImportError:
     DEFAULT_DB_PATH = "~/.openclaw/erpclaw/data.sqlite"
     pass
@@ -29,10 +30,10 @@ _now_iso = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 # ===========================================================================
 def channel_performance(conn, args):
     """Sales performance by price list (channel proxy)."""
+    company_id = resolve_scope_company(conn, getattr(args, "company_id", None), getattr(args, "company_name", None))
     where, params = ["1=1"], []
-    if getattr(args, "company_id", None):
-        where.append("pl.company_id = ?")
-        params.append(args.company_id)
+    where.append("pl.company_id = ?")
+    params.append(company_id)
     if getattr(args, "start_date", None):
         where.append("pl.created_at >= ?")
         params.append(args.start_date)
@@ -72,10 +73,10 @@ def channel_performance(conn, args):
 # ===========================================================================
 def margin_analysis(conn, args):
     """Margin analysis comparing wholesale vs retail pricing."""
+    company_id = resolve_scope_company(conn, getattr(args, "company_id", None), getattr(args, "company_name", None))
     where, params = ["1=1"], []
-    if getattr(args, "company_id", None):
-        where.append("pli.price_list_id IN (SELECT id FROM retailclaw_price_list WHERE company_id = ?)")
-        params.append(args.company_id)
+    where.append("pli.price_list_id IN (SELECT id FROM retailclaw_price_list WHERE company_id = ?)")
+    params.append(company_id)
 
     where_sql = " AND ".join(where)
     rows = conn.execute(f"""
@@ -113,10 +114,10 @@ def margin_analysis(conn, args):
 # ===========================================================================
 def loyalty_report(conn, args):
     """Loyalty program statistics: members, points issued/redeemed by tier."""
+    company_id = resolve_scope_company(conn, getattr(args, "company_id", None), getattr(args, "company_name", None))
     where, params = ["1=1"], []
-    if getattr(args, "company_id", None):
-        where.append("lm.company_id = ?")
-        params.append(args.company_id)
+    where.append("lm.company_id = ?")
+    params.append(company_id)
     if getattr(args, "program_id", None):
         where.append("lm.program_id = ?")
         params.append(args.program_id)
@@ -181,10 +182,10 @@ def loyalty_report(conn, args):
 # ===========================================================================
 def category_performance(conn, args):
     """Category listing with item counts from planograms."""
+    company_id = resolve_scope_company(conn, getattr(args, "company_id", None), getattr(args, "company_name", None))
     where, params = ["1=1"], []
-    if getattr(args, "company_id", None):
-        where.append("c.company_id = ?")
-        params.append(args.company_id)
+    where.append("c.company_id = ?")
+    params.append(company_id)
 
     where_sql = " AND ".join(where)
     rows = conn.execute(f"""
@@ -214,10 +215,10 @@ def category_performance(conn, args):
 # ===========================================================================
 def promotion_effectiveness(conn, args):
     """Promotion stats: usage rate, redemption counts."""
+    company_id = resolve_scope_company(conn, getattr(args, "company_id", None), getattr(args, "company_name", None))
     where, params = ["1=1"], []
-    if getattr(args, "company_id", None):
-        where.append("company_id = ?")
-        params.append(args.company_id)
+    where.append("company_id = ?")
+    params.append(company_id)
     if getattr(args, "promo_status", None):
         where.append("promo_status = ?")
         params.append(args.promo_status)
@@ -258,10 +259,10 @@ def promotion_effectiveness(conn, args):
 # ===========================================================================
 def inventory_turnover(conn, args):
     """Wholesale order volume by item as a proxy for inventory turnover."""
+    company_id = resolve_scope_company(conn, getattr(args, "company_id", None), getattr(args, "company_name", None))
     where, params = ["1=1"], []
-    if getattr(args, "company_id", None):
-        where.append("wo.company_id = ?")
-        params.append(args.company_id)
+    where.append("wo.company_id = ?")
+    params.append(company_id)
     if getattr(args, "start_date", None):
         where.append("wo.order_date >= ?")
         params.append(args.start_date)

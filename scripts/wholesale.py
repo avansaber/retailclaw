@@ -28,6 +28,8 @@ except ImportError:
 
 _now_iso = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+SKILL = "retailclaw"
+
 # ---------------------------------------------------------------------------
 # Validation constants
 # ---------------------------------------------------------------------------
@@ -95,7 +97,7 @@ def add_wholesale_customer(conn, args):
         getattr(args, "zip_code", None),
         "active", args.company_id, _ts, _ts,
     ))
-    audit(conn, "retailclaw_wholesale_customer", wc_id, "retail-add-wholesale-customer", args.company_id)
+    audit(conn, SKILL, "retail-add-wholesale-customer", "retailclaw_wholesale_customer", wc_id)
     conn.commit()
     ok({"id": wc_id, "naming_series": naming, "business_name": business_name, "wholesale_status": "active"})
 
@@ -142,7 +144,8 @@ def update_wholesale_customer(conn, args):
     data["updated_at"] = now()
     sql, params = dynamic_update("retailclaw_wholesale_customer", data, where={"id": wc_id})
     conn.execute(sql, params)
-    audit(conn, "retailclaw_wholesale_customer", wc_id, "retail-update-wholesale-customer", None, {"updated_fields": changed})
+    audit(conn, SKILL, "retail-update-wholesale-customer", "retailclaw_wholesale_customer", wc_id,
+          new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": wc_id, "updated_fields": changed})
 
@@ -210,7 +213,7 @@ def add_wholesale_price(conn, args):
         getattr(args, "valid_to", None),
         args.company_id, _ts, _ts,
     ))
-    audit(conn, "retailclaw_wholesale_price", wp_id, "retail-add-wholesale-price", args.company_id)
+    audit(conn, SKILL, "retail-add-wholesale-price", "retailclaw_wholesale_price", wp_id)
     conn.commit()
     ok({"id": wp_id, "wholesale_rate": str(round_currency(to_decimal(wholesale_rate)))})
 
@@ -275,7 +278,7 @@ def add_wholesale_order(conn, args):
         getattr(args, "notes", None),
         "draft", args.company_id, _ts, _ts,
     ))
-    audit(conn, "retailclaw_wholesale_order", wo_id, "retail-add-wholesale-order", args.company_id)
+    audit(conn, SKILL, "retail-add-wholesale-order", "retailclaw_wholesale_order", wo_id)
     conn.commit()
     ok({"id": wo_id, "naming_series": naming, "order_status": "draft"})
 
@@ -385,7 +388,7 @@ def add_wholesale_order_item(conn, args):
     }, where={"id": order_id})
     conn.execute(sql, upd_params)
 
-    audit(conn, "retailclaw_wholesale_order_item", oi_id, "retail-add-wholesale-order-item", None)
+    audit(conn, SKILL, "retail-add-wholesale-order-item", "retailclaw_wholesale_order_item", oi_id)
     conn.commit()
     ok({"id": oi_id, "order_id": order_id, "item_name": item_name, "qty": qty, "rate": str(rate_dec), "amount": str(amount_dec)})
 

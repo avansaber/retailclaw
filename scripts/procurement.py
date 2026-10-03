@@ -24,7 +24,8 @@ try:
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, LiteralValue, insert_row, update_row, dynamic_update
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, LiteralValue, DecimalSum, insert_row, update_row, dynamic_update
+    from erpclaw_lib.query_helpers import resolve_scope_company
 except ImportError:
     pass
 
@@ -56,6 +57,96 @@ def _validate_company(conn, company_id):
         err(f"Company {company_id} not found")
 
 
+_Q2 = Decimal("0.01")
+_Q1 = Decimal("0.1")
+
+
+def _text_level(val):
+    if val is None:
+        return Decimal("0")
+    text = str(val).strip()
+    if text == "":
+        return Decimal("0")
+    return Decimal(text)
+
+
+def _q2(val):
+    return str(Decimal(val).quantize(_Q2, rounding=ROUND_HALF_UP))
+
+
+def _below_reorder(conn, company_id):
+    # Company scope of stock: items are a shared catalog with no company
+    # column; stock lives per warehouse and a warehouse belongs to a company.
+    # A company's stock of an item = the exact Decimal sum of actual_qty over
+    # stock_ledger_entry rows with is_cancelled = 0 whose warehouse_id is a
+    # warehouse with that company_id. Candidate items: is_stock_item = 1 and
+    # reorder_level > 0 compared as Decimal in Python. An item is below
+    # reorder when company stock <= reorder level, as the original query
+    # intended; an item with no stock rows in the company counts as zero
+    # stock (the original COALESCE). A NULL reorder_level or reorder_qty
+    # reads as 0, as the original COALESCE did, so an item with no reorder
+    # level is never a candidate. This is the rule core inventory's
+    # check_reorder already applies
+    # (source/erpclaw/scripts/erpclaw-inventory/db_query.py, 2846-2860).
+    # Built with PyPika and DecimalSum; the comparison and ordering happen
+    # in Python.
+    t_item = Table("item")
+    t_sle = Table("stock_ledger_entry")
+    t_wh = Table("warehouse")
+    q_items = (
+        Q.from_(t_item)
+        .select(
+            t_item.id,
+            t_item.item_name,
+            t_item.item_code,
+            t_item.reorder_level,
+            t_item.reorder_qty,
+            t_item.standard_rate,
+        )
+        .where(t_item.is_stock_item == 1)
+    )
+    item_rows = conn.execute(q_items.get_sql()).fetchall()
+    q_stock = (
+        Q.from_(t_sle)
+        .join(t_wh)
+        .on(t_wh.id == t_sle.warehouse_id)
+        .select(
+            t_sle.item_id,
+            DecimalSum(t_sle.actual_qty).as_("total_qty"),
+        )
+        .where(t_wh.company_id == P())
+        .where(t_sle.is_cancelled == 0)
+        .groupby(t_sle.item_id)
+    )
+    stock_map = {}
+    for srow in conn.execute(q_stock.get_sql(), (company_id,)).fetchall():
+        total = srow["total_qty"]
+        stock_map[srow["item_id"]] = _d(total) if total is not None else Decimal("0")
+    result = []
+    for r in item_rows:
+        level = _text_level(r["reorder_level"])
+        if level <= 0:
+            continue
+        stock = stock_map.get(r["id"], Decimal("0"))
+        if stock <= level:
+            raw_level = r["reorder_level"] if r["reorder_level"] is not None else "0"
+            raw_qty = r["reorder_qty"] if r["reorder_qty"] is not None else "0"
+            raw_rate = r["standard_rate"] if r["standard_rate"] is not None else "0"
+            result.append(
+                {
+                    "item_id": r["id"],
+                    "item_name": r["item_name"],
+                    "item_code": r["item_code"],
+                    "reorder_level": str(raw_level),
+                    "reorder_level_dec": level,
+                    "reorder_qty": str(raw_qty),
+                    "standard_rate": str(raw_rate),
+                    "current_stock": stock,
+                }
+            )
+    return result
+
+
 # ===========================================================================
 # R3: RETAIL PROCUREMENT
 # ===========================================================================
@@ -63,36 +154,26 @@ def _validate_company(conn, company_id):
 def check_reorder_points(conn, args):
     """Compare stock vs reorder level per location."""
     _validate_company(conn, args.company_id)
-
-    # Check items where current stock is at or below reorder level
-    # Uses stock_ledger_entry or item reorder_level field
-    rows = conn.execute(
-        """SELECT i.id as item_id, i.item_name, i.item_code,
-                  COALESCE(i.reorder_level, '0') as reorder_level,
-                  COALESCE(
-                      (SELECT SUM(CAST(actual_qty AS REAL))
-                       FROM stock_ledger_entry
-                       WHERE item_id = i.id),
-                      0
-                  ) as current_stock
-           FROM item i
-           WHERE i.company_id = ?
-           AND i.is_stock_item = 1
-           HAVING CAST(current_stock AS REAL) <= CAST(reorder_level AS REAL)
-                  AND CAST(reorder_level AS REAL) > 0
-           ORDER BY current_stock ASC""",
-        (args.company_id,),
-    ).fetchall()
-
+    # Company scope of stock: items are a shared catalog; stock is per
+    # warehouse and a warehouse belongs to a company. A company's stock of an
+    # item = the exact Decimal sum of actual_qty over stock_ledger_entry rows
+    # with is_cancelled = 0 whose warehouse_id is a warehouse with that
+    # company_id (see _below_reorder; same rule as core inventory's
+    # check_reorder in source/erpclaw/scripts/erpclaw-inventory/db_query.py,
+    # 2846-2860). Comparison and ordering happen in Python.
+    rows = _below_reorder(conn, args.company_id)
+    rows = sorted(rows, key=lambda r: (r["current_stock"], r["item_name"] or ""))
     items = []
     for r in rows:
+        stock = r["current_stock"]
+        level = r["reorder_level_dec"]
         items.append({
             "item_id": r["item_id"],
             "item_name": r["item_name"],
             "item_code": r["item_code"],
             "reorder_level": r["reorder_level"],
-            "current_stock": str(round(r["current_stock"], 2)),
-            "deficit": str(round(float(r["reorder_level"]) - r["current_stock"], 2)),
+            "current_stock": _q2(stock),
+            "deficit": _q2(level - stock),
         })
 
     ok({
@@ -105,47 +186,38 @@ def check_reorder_points(conn, args):
 def generate_purchase_suggestions(conn, args):
     """Generate purchase suggestions for items below reorder levels."""
     _validate_company(conn, args.company_id)
-
-    rows = conn.execute(
-        """SELECT i.id as item_id, i.item_name, i.item_code,
-                  COALESCE(i.reorder_level, '0') as reorder_level,
-                  COALESCE(i.reorder_qty, '0') as reorder_qty,
-                  COALESCE(i.standard_rate, '0') as standard_rate,
-                  COALESCE(
-                      (SELECT SUM(CAST(actual_qty AS REAL))
-                       FROM stock_ledger_entry
-                       WHERE item_id = i.id),
-                      0
-                  ) as current_stock
-           FROM item i
-           WHERE i.company_id = ?
-           AND i.is_stock_item = 1
-           HAVING CAST(current_stock AS REAL) <= CAST(reorder_level AS REAL)
-                  AND CAST(reorder_level AS REAL) > 0
-           ORDER BY item_name""",
-        (args.company_id,),
-    ).fetchall()
-
+    # Company scope of stock: shared catalog, per-warehouse stock scoped by
+    # the warehouse's company_id; exact Decimal sums with is_cancelled = 0
+    # (see _below_reorder; same rule as core inventory's check_reorder in
+    # source/erpclaw/scripts/erpclaw-inventory/db_query.py, 2846-2860).
+    # Comparison and ordering happen in Python.
+    rows = _below_reorder(conn, args.company_id)
+    rows = sorted(rows, key=lambda r: (r["item_name"] or "", r["item_id"]))
     suggestions = []
     total_cost = Decimal("0")
     for r in rows:
-        reorder_qty = _d(r["reorder_qty"]) if _d(r["reorder_qty"]) > 0 else _d(r["reorder_level"])
+        qty_dec = _text_level(r["reorder_qty"])
+        if qty_dec <= 0:
+            qty_dec = r["reorder_level_dec"]
+            suggested_qty = r["reorder_level"]
+        else:
+            suggested_qty = r["reorder_qty"]
         rate = _d(r["standard_rate"])
-        est_cost = reorder_qty * rate
+        est_cost = qty_dec * rate
         total_cost += est_cost
         suggestions.append({
             "item_id": r["item_id"],
             "item_name": r["item_name"],
-            "current_stock": str(round(r["current_stock"], 2)),
+            "current_stock": _q2(r["current_stock"]),
             "reorder_level": r["reorder_level"],
-            "suggested_qty": str(reorder_qty),
-            "estimated_cost": str(est_cost.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+            "suggested_qty": suggested_qty,
+            "estimated_cost": _q2(est_cost),
         })
 
     ok({
         "company_id": args.company_id,
         "suggestion_count": len(suggestions),
-        "estimated_total_cost": str(total_cost.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+        "estimated_total_cost": _q2(total_cost),
         "suggestions": suggestions,
     })
 
@@ -156,34 +228,42 @@ def auto_create_purchase_orders(conn, args):
 
     # This action generates the data for purchase orders. Actual PO creation
     # goes through erpclaw-buying module.
-    rows = conn.execute(
-        """SELECT i.id as item_id, i.item_name, i.item_code,
-                  COALESCE(i.reorder_level, '0') as reorder_level,
-                  COALESCE(i.reorder_qty, '0') as reorder_qty,
-                  COALESCE(i.standard_rate, '0') as standard_rate,
-                  COALESCE(i.default_supplier_id, '') as supplier_id,
-                  COALESCE(
-                      (SELECT SUM(CAST(actual_qty AS REAL))
-                       FROM stock_ledger_entry
-                       WHERE item_id = i.id),
-                      0
-                  ) as current_stock
-           FROM item i
-           WHERE i.company_id = ?
-           AND i.is_stock_item = 1
-           HAVING CAST(current_stock AS REAL) <= CAST(reorder_level AS REAL)
-                  AND CAST(reorder_level AS REAL) > 0""",
-        (args.company_id,),
-    ).fetchall()
-
-    # Group by supplier
+    # Company scope of stock: shared catalog, per-warehouse stock scoped by
+    # the warehouse's company_id; exact Decimal sums with is_cancelled = 0
+    # (see _below_reorder; same rule as core inventory's check_reorder in
+    # source/erpclaw/scripts/erpclaw-inventory/db_query.py, 2846-2860).
+    # Comparison and ordering happen in Python.
+    # Supplier grouping: item_supplier is the item's supplier list and the
+    # buying module picks the lowest priority as most preferred
+    # (create_po_from_so in
+    # source/erpclaw/scripts/erpclaw-buying/db_query.py, 4110-4115). Use the
+    # same rule: the item's item_supplier row with the lowest priority, ties
+    # by supplier_id ascending, with no filter on the supplier's company or
+    # status (buying applies none when it picks). No row -> "unassigned".
+    rows = _below_reorder(conn, args.company_id)
+    rows = sorted(rows, key=lambda r: (r["item_name"] or "", r["item_id"]))
+    t_sup = Table("item_supplier")
     by_supplier = {}
     for r in rows:
-        sid = r["supplier_id"] or "unassigned"
+        q_sup = (
+            Q.from_(t_sup)
+            .select(t_sup.supplier_id)
+            .where(t_sup.item_id == P())
+            .orderby(t_sup.priority)
+            .orderby(t_sup.supplier_id)
+            .limit(1)
+        )
+        sup_row = conn.execute(q_sup.get_sql(), (r["item_id"],)).fetchone()
+        sid = sup_row["supplier_id"] if sup_row else "unassigned"
+        qty_dec = _text_level(r["reorder_qty"])
+        if qty_dec <= 0:
+            qty_text = r["reorder_level"]
+        else:
+            qty_text = r["reorder_qty"]
         by_supplier.setdefault(sid, []).append({
             "item_id": r["item_id"],
             "item_name": r["item_name"],
-            "qty": str(_d(r["reorder_qty"]) if _d(r["reorder_qty"]) > 0 else _d(r["reorder_level"])),
+            "qty": qty_text,
             "rate": r["standard_rate"],
         })
 
@@ -198,27 +278,35 @@ def auto_create_purchase_orders(conn, args):
 def procurement_report(conn, args):
     _validate_company(conn, args.company_id)
 
-    total_items = conn.execute(
-        "SELECT COUNT(*) as cnt FROM item WHERE company_id = ? AND is_stock_item = 1",
-        (args.company_id,),
-    ).fetchone()["cnt"]
-
-    below_reorder = conn.execute(
-        """SELECT COUNT(*) as cnt FROM item i
-           WHERE i.company_id = ? AND i.is_stock_item = 1
-           AND CAST(COALESCE(i.reorder_level, '0') AS REAL) > 0
-           AND COALESCE(
-               (SELECT SUM(CAST(actual_qty AS REAL)) FROM stock_ledger_entry WHERE item_id = i.id),
-               0
-           ) <= CAST(COALESCE(i.reorder_level, '0') AS REAL)""",
-        (args.company_id,),
-    ).fetchone()["cnt"]
+    # Company scope of stock: the catalog is shared so total_stock_items
+    # counts every item with is_stock_item = 1; below-reorder uses the exact
+    # Decimal per-company stock rule (see _below_reorder; same rule as core
+    # inventory's check_reorder in
+    # source/erpclaw/scripts/erpclaw-inventory/db_query.py, 2846-2860).
+    # Comparison happens in Python.
+    t_item = Table("item")
+    q_total = (
+        Q.from_(t_item)
+        .select(fn.Count("*").as_("cnt"))
+        .where(t_item.is_stock_item == 1)
+    )
+    total_items = conn.execute(q_total.get_sql()).fetchone()["cnt"]
+    below_rows = _below_reorder(conn, args.company_id)
+    below_reorder = len(below_rows)
+    if total_items > 0:
+        reorder_pct = str(
+            (Decimal(below_reorder) / Decimal(total_items) * Decimal(100)).quantize(
+                _Q1, rounding=ROUND_HALF_UP
+            )
+        )
+    else:
+        reorder_pct = "0.0"
 
     ok({
         "company_id": args.company_id,
         "total_stock_items": total_items,
         "items_below_reorder": below_reorder,
-        "reorder_pct": str(round(below_reorder / total_items * 100, 1)) if total_items > 0 else "0.0",
+        "reorder_pct": reorder_pct,
     })
 
 
@@ -340,14 +428,13 @@ def record_shrinkage(conn, args):
 
 
 def list_shrinkage(conn, args):
+    company_id = resolve_scope_company(conn, getattr(args, "company_id", None), getattr(args, "company_name", None))
     t = _t_shrinkage
     q = Q.from_(t).select(t.star)
     params = []
 
-    cid = getattr(args, "company_id", None)
-    if cid:
-        q = q.where(t.company_id == P())
-        params.append(cid)
+    q = q.where(t.company_id == P())
+    params.append(company_id)
     store_id = getattr(args, "store_location_id", None)
     if store_id:
         q = q.where(t.store_location_id == P())
@@ -486,17 +573,33 @@ def calculate_rfm(conn, args):
     """Recency/Frequency/Monetary analysis per customer."""
     _validate_company(conn, args.company_id)
 
+    # Submitted invoices: docstatus = 1 means submitted and not cancelled, so
+    # status IN ('submitted', 'partially_paid', 'paid', 'overdue'). This is a
+    # literal translation, so it adds no is_return filter: a submitted credit
+    # note (stored with a negative grand_total) counts in frequency and
+    # recency and nets the monetary sum, as docstatus = 1 would have.
+    # GROUP BY si.customer_id, c.name so the query is valid on PostgreSQL.
+    # Money is summed with DecimalSum and scored on Decimal (no float).
+    t_si = Table("sales_invoice")
+    t_c = Table("customer")
+    q = (
+        Q.from_(t_si)
+        .join(t_c)
+        .on(t_c.id == t_si.customer_id)
+        .select(
+            t_si.customer_id,
+            t_c.name.as_("customer_name"),
+            fn.Max(t_si.posting_date).as_("last_purchase_date"),
+            fn.Count("*").as_("purchase_count"),
+            DecimalSum(t_si.grand_total).as_("total_spent"),
+        )
+        .where(t_si.company_id == P())
+        .where(t_si.status.isin([P(), P(), P(), P()]))
+        .groupby(t_si.customer_id, t_c.name)
+    )
     rows = conn.execute(
-        """SELECT si.customer_id, c.name as customer_name,
-                  MAX(si.posting_date) as last_purchase_date,
-                  COUNT(*) as purchase_count,
-                  SUM(CAST(si.grand_total AS REAL)) as total_spent
-           FROM sales_invoice si
-           JOIN customer c ON si.customer_id = c.id
-           WHERE si.company_id = ? AND si.docstatus = 1
-           GROUP BY si.customer_id
-           ORDER BY total_spent DESC""",
-        (args.company_id,),
+        q.get_sql(),
+        (args.company_id, "submitted", "partially_paid", "paid", "overdue"),
     ).fetchall()
 
     today = date.today()
@@ -518,7 +621,7 @@ def calculate_rfm(conn, args):
         # Simple RFM scoring (1-5 scale)
         r_score = 5 if recency_days <= 30 else (4 if recency_days <= 60 else (3 if recency_days <= 90 else (2 if recency_days <= 180 else 1)))
         f_score = min(5, max(1, freq))
-        m_score = 5 if total >= 10000 else (4 if total >= 5000 else (3 if total >= 1000 else (2 if total >= 100 else 1)))
+        m_score = 5 if total >= Decimal("10000") else (4 if total >= Decimal("5000") else (3 if total >= Decimal("1000") else (2 if total >= Decimal("100") else 1)))
 
         rfm_total = r_score + f_score + m_score
         if rfm_total >= 12:
@@ -537,13 +640,14 @@ def calculate_rfm(conn, args):
             "customer_name": r["customer_name"],
             "recency_days": recency_days,
             "frequency": freq,
-            "monetary": str(total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+            "monetary": _q2(total),
             "r_score": r_score,
             "f_score": f_score,
             "m_score": m_score,
             "rfm_total": rfm_total,
             "segment": segment,
         })
+    segments = sorted(segments, key=lambda s: _d(s["monetary"]), reverse=True)
 
     ok({
         "company_id": args.company_id,
@@ -556,16 +660,33 @@ def list_customer_segments(conn, args):
     """List aggregated customer segment counts."""
     _validate_company(conn, args.company_id)
 
+    # Submitted invoices: docstatus = 1 means submitted and not cancelled, so
+    # status IN ('submitted', 'partially_paid', 'paid', 'overdue'). This is a
+    # literal translation, so it adds no is_return filter: a submitted credit
+    # note (stored with a negative grand_total) counts in frequency and
+    # recency and nets the monetary sum, as docstatus = 1 would have.
+    # GROUP BY si.customer_id, c.name so the query is valid on PostgreSQL.
+    # Money is summed with DecimalSum and scored on Decimal (no float).
+    t_si = Table("sales_invoice")
+    t_c = Table("customer")
+    q = (
+        Q.from_(t_si)
+        .join(t_c)
+        .on(t_c.id == t_si.customer_id)
+        .select(
+            t_si.customer_id,
+            t_c.name.as_("customer_name"),
+            fn.Max(t_si.posting_date).as_("last_purchase_date"),
+            fn.Count("*").as_("purchase_count"),
+            DecimalSum(t_si.grand_total).as_("total_spent"),
+        )
+        .where(t_si.company_id == P())
+        .where(t_si.status.isin([P(), P(), P(), P()]))
+        .groupby(t_si.customer_id, t_c.name)
+    )
     rows = conn.execute(
-        """SELECT si.customer_id, c.name as customer_name,
-                  MAX(si.posting_date) as last_purchase_date,
-                  COUNT(*) as purchase_count,
-                  SUM(CAST(si.grand_total AS REAL)) as total_spent
-           FROM sales_invoice si
-           JOIN customer c ON si.customer_id = c.id
-           WHERE si.company_id = ? AND si.docstatus = 1
-           GROUP BY si.customer_id""",
-        (args.company_id,),
+        q.get_sql(),
+        (args.company_id, "submitted", "partially_paid", "paid", "overdue"),
     ).fetchall()
 
     today = date.today()
@@ -582,12 +703,12 @@ def list_customer_segments(conn, args):
         else:
             recency_days = 999
 
-        total = float(r["total_spent"] or 0)
+        total = _d(r["total_spent"])
         freq = r["purchase_count"]
 
         r_score = 5 if recency_days <= 30 else (4 if recency_days <= 60 else (3 if recency_days <= 90 else (2 if recency_days <= 180 else 1)))
         f_score = min(5, max(1, freq))
-        m_score = 5 if total >= 10000 else (4 if total >= 5000 else (3 if total >= 1000 else (2 if total >= 100 else 1)))
+        m_score = 5 if total >= Decimal("10000") else (4 if total >= Decimal("5000") else (3 if total >= Decimal("1000") else (2 if total >= Decimal("100") else 1)))
 
         rfm_total = r_score + f_score + m_score
         if rfm_total >= 12:
@@ -612,16 +733,33 @@ def segment_performance_report(conn, args):
     """Performance report by customer segment."""
     _validate_company(conn, args.company_id)
 
+    # Submitted invoices: docstatus = 1 means submitted and not cancelled, so
+    # status IN ('submitted', 'partially_paid', 'paid', 'overdue'). This is a
+    # literal translation, so it adds no is_return filter: a submitted credit
+    # note (stored with a negative grand_total) counts in frequency and
+    # recency and nets the monetary sum, as docstatus = 1 would have.
+    # GROUP BY si.customer_id, c.name so the query is valid on PostgreSQL.
+    # Money is summed with DecimalSum and scored on Decimal (no float).
+    t_si = Table("sales_invoice")
+    t_c = Table("customer")
+    q = (
+        Q.from_(t_si)
+        .join(t_c)
+        .on(t_c.id == t_si.customer_id)
+        .select(
+            t_si.customer_id,
+            t_c.name.as_("customer_name"),
+            fn.Max(t_si.posting_date).as_("last_purchase_date"),
+            fn.Count("*").as_("purchase_count"),
+            DecimalSum(t_si.grand_total).as_("total_spent"),
+        )
+        .where(t_si.company_id == P())
+        .where(t_si.status.isin([P(), P(), P(), P()]))
+        .groupby(t_si.customer_id, t_c.name)
+    )
     rows = conn.execute(
-        """SELECT si.customer_id, c.name as customer_name,
-                  MAX(si.posting_date) as last_purchase_date,
-                  COUNT(*) as purchase_count,
-                  SUM(CAST(si.grand_total AS REAL)) as total_spent
-           FROM sales_invoice si
-           JOIN customer c ON si.customer_id = c.id
-           WHERE si.company_id = ? AND si.docstatus = 1
-           GROUP BY si.customer_id""",
-        (args.company_id,),
+        q.get_sql(),
+        (args.company_id, "submitted", "partially_paid", "paid", "overdue"),
     ).fetchall()
 
     today = date.today()
@@ -649,7 +787,7 @@ def segment_performance_report(conn, args):
 
         r_score = 5 if recency_days <= 30 else (4 if recency_days <= 60 else (3 if recency_days <= 90 else (2 if recency_days <= 180 else 1)))
         f_score = min(5, max(1, freq))
-        m_score = 5 if total >= 10000 else (4 if total >= 5000 else (3 if total >= 1000 else (2 if total >= 100 else 1)))
+        m_score = 5 if total >= Decimal("10000") else (4 if total >= Decimal("5000") else (3 if total >= Decimal("1000") else (2 if total >= Decimal("100") else 1)))
 
         rfm_total = r_score + f_score + m_score
         if rfm_total >= 12:
@@ -669,11 +807,18 @@ def segment_performance_report(conn, args):
 
     result = {}
     for seg, data in segment_data.items():
-        avg_freq = data["avg_frequency"] / data["count"] if data["count"] > 0 else 0
+        if data["count"] > 0:
+            avg_freq = str(
+                (Decimal(data["avg_frequency"]) / Decimal(data["count"])).quantize(
+                    _Q1, rounding=ROUND_HALF_UP
+                )
+            )
+        else:
+            avg_freq = "0"
         result[seg] = {
             "customer_count": data["count"],
-            "total_revenue": str(data["revenue"].quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
-            "avg_frequency": str(round(avg_freq, 1)),
+            "total_revenue": _q2(data["revenue"]),
+            "avg_frequency": avg_freq,
         }
 
     ok({
@@ -700,6 +845,8 @@ def issue_store_credit(conn, args):
         err(f"Invalid source: {source}. Must be one of: {', '.join(VALID_CREDIT_SOURCES)}")
 
     amt = _d(amount)
+    if amt <= 0:
+        err("--amount must be greater than zero")
     sc_id = str(uuid.uuid4())
     n = _now_iso()
     sql, _ = insert_row("retailclaw_store_credit", {
@@ -745,6 +892,8 @@ def redeem_store_credit(conn, args):
         err(f"Store credit is {row['status']}")
 
     redeem_amt = _d(amount)
+    if redeem_amt <= 0:
+        err("--amount must be greater than zero")
     balance = _d(row["remaining_balance"])
 
     if redeem_amt > balance:

@@ -18,11 +18,13 @@ try:
     import importlib.util
     if importlib.util.find_spec("erpclaw_lib") is None:
         sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
-    from erpclaw_lib.db import get_connection, ensure_db_exists, DEFAULT_DB_PATH
+    from erpclaw_lib.db import get_connection
     from erpclaw_lib.validation import check_input_lengths
     from erpclaw_lib.response import ok, err
     from erpclaw_lib.dependencies import check_required_tables
     from erpclaw_lib.args import SafeArgumentParser
+    from erpclaw_lib.query_helpers import resolve_company_id
+    from erpclaw_lib.query import Q, P, Table
 except ImportError:
     import json as _json
     print(_json.dumps({
@@ -63,6 +65,22 @@ ACTIONS.update(ECOMMERCE_ACTIONS)
 ACTIONS.update(PROCUREMENT_ACTIONS)
 
 
+def _resolve_company_flag(conn, args):
+    """Resolve --company (name or id) into args.company_id.
+
+    Called once in main() before dispatch. A value that is exactly an
+    existing company.id sets args.company_id to it; only otherwise is the
+    value resolved as an exact company name (a miss refuses).
+    """
+    if getattr(args, "company_name", None) and not getattr(args, "company_id", None):
+        _t_company = Table("company")
+        probe = Q.from_(_t_company).select(_t_company.id).where(_t_company.id == P())
+        if conn.execute(probe.get_sql(), (args.company_name,)).fetchone():
+            args.company_id = args.company_name
+            return
+        args.company_id = resolve_company_id(conn, None, args.company_name)
+
+
 def main():
     parser = SafeArgumentParser(description="retailclaw")
     parser.add_argument("--action", required=True, choices=sorted(ACTIONS.keys()))
@@ -70,6 +88,7 @@ def main():
 
     # -- Shared IDs --
     parser.add_argument("--company-id")
+    parser.add_argument("--company", dest="company_name", default=None)
     parser.add_argument("--customer-id")
     parser.add_argument("--item-id")
 
@@ -215,7 +234,7 @@ def main():
     parser.add_argument("--store-credit-id")
     parser.add_argument("--source")
 
-    # ── GL Posting (optional, for process-return) ──────────────────
+    # ── GL Posting (for process-return) ──────────────────
     parser.add_argument("--sales-returns-account-id", help="GL account for Sales Returns & Allowances (debit)")
     parser.add_argument("--cash-account-id", help="GL account for Cash/AR (credit for refund)")
     parser.add_argument("--inventory-account-id", help="GL account for Inventory (debit on restock)")
@@ -227,13 +246,13 @@ def main():
     action = args.action
 
     # DB setup
-    db_path = args.db_path or os.environ.get("ERPCLAW_DB_PATH", DEFAULT_DB_PATH)
-    ensure_db_exists(db_path)
-
-    conn = get_connection(db_path) if args.db_path else get_connection()
+    db_path = getattr(args, "db_path", None)
+    conn = get_connection(db_path)
 
     # Check required tables exist
     check_required_tables(conn, REQUIRED_TABLES)
+
+    _resolve_company_flag(conn, args)
 
     # Dispatch
     handler = ACTIONS[action]

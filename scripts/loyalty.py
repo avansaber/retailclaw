@@ -30,6 +30,8 @@ except ImportError:
 
 _now_iso = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+SKILL = "retailclaw"
+
 # ---------------------------------------------------------------------------
 # Validation constants
 # ---------------------------------------------------------------------------
@@ -87,7 +89,7 @@ def add_loyalty_program(conn, args):
         getattr(args, "tiers", None) or "[]",
         "active", args.company_id, now, now,
     ))
-    audit(conn, "retailclaw_loyalty_program", prog_id, "retail-add-loyalty-program", args.company_id)
+    audit(conn, SKILL, "retail-add-loyalty-program", "retailclaw_loyalty_program", prog_id)
     conn.commit()
     ok({"id": prog_id, "naming_series": naming, "name": name, "program_status": "active"})
 
@@ -177,7 +179,7 @@ def add_loyalty_member(conn, args):
         0, 0, enrollment_date, None,
         "active", args.company_id, now, now,
     ))
-    audit(conn, "retailclaw_loyalty_member", mem_id, "retail-add-loyalty-member", args.company_id)
+    audit(conn, SKILL, "retail-add-loyalty-member", "retailclaw_loyalty_member", mem_id)
     conn.commit()
     ok({"id": mem_id, "naming_series": naming, "customer_name": customer_name, "member_tier": "bronze", "points_balance": 0})
 
@@ -216,7 +218,8 @@ def update_loyalty_member(conn, args):
     data["updated_at"] = sql_now()
     sql, params = dynamic_update("retailclaw_loyalty_member", data, where={"id": member_id})
     conn.execute(sql, params)
-    audit(conn, "retailclaw_loyalty_member", member_id, "retail-update-loyalty-member", None, {"updated_fields": changed})
+    audit(conn, SKILL, "retail-update-loyalty-member", "retailclaw_loyalty_member", member_id,
+          new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": member_id, "updated_fields": changed})
 
@@ -310,7 +313,7 @@ def add_loyalty_points(conn, args):
         getattr(args, "description", None) or f"Earned {points_val} points",
         _now_iso(),
     ))
-    audit(conn, "retailclaw_loyalty_member", member_id, "retail-add-loyalty-points", None)
+    audit(conn, SKILL, "retail-add-loyalty-points", "retailclaw_loyalty_member", member_id)
     conn.commit()
     ok({"member_id": member_id, "points_added": points_val, "points_balance": new_balance, "lifetime_points": new_lifetime})
 
@@ -352,7 +355,7 @@ def redeem_loyalty_points(conn, args):
         getattr(args, "description", None) or f"Redeemed {points_val} points",
         _now_iso(),
     ))
-    audit(conn, "retailclaw_loyalty_member", member_id, "retail-redeem-loyalty-points", None)
+    audit(conn, SKILL, "retail-redeem-loyalty-points", "retailclaw_loyalty_member", member_id)
     conn.commit()
     ok({"member_id": member_id, "points_redeemed": points_val, "points_balance": new_balance})
 
@@ -389,7 +392,7 @@ def add_gift_card(conn, args):
         getattr(args, "expiration_date", None),
         "active", args.company_id, now, now,
     ))
-    audit(conn, "retailclaw_gift_card", gc_id, "retail-add-gift-card", args.company_id)
+    audit(conn, SKILL, "retail-add-gift-card", "retailclaw_gift_card", gc_id)
     conn.commit()
     ok({"id": gc_id, "card_number": card_number, "initial_balance": str(balance_dec), "card_status": "active"})
 
@@ -449,6 +452,8 @@ def redeem_gift_card(conn, args):
         err("--amount is required")
 
     amount_dec = round_currency(to_decimal(amount))
+    if amount_dec <= 0:
+        err("--amount must be greater than zero")
     current = to_decimal(data["current_balance"])
 
     if amount_dec > current:
@@ -464,7 +469,7 @@ def redeem_gift_card(conn, args):
         "updated_at": sql_now(),
     }, where={"id": actual_gc_id})
     conn.execute(sql, upd_params)
-    audit(conn, "retailclaw_gift_card", actual_gc_id, "retail-redeem-gift-card", None)
+    audit(conn, SKILL, "retail-redeem-gift-card", "retailclaw_gift_card", actual_gc_id)
     conn.commit()
     ok({
         "card_number": data["card_number"],
